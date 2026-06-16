@@ -16,6 +16,7 @@ from api.schemas.job import (
     AutoProcessItemResult,
     AutoProcessRequest,
     AutoProcessResponse,
+    CoregParameters,
     JobCreateRequest,
     JobDetailResponse,
     JobResponse,
@@ -266,15 +267,13 @@ def _create_metrics_for_job(db: Session, job: CoregJob, result: dict) -> None:
     job.metrics = metrics
     db.flush()
 
-def _process_job(job: CoregJob, target_path: Path, base_path: Path, db: Session) -> None:
+def _process_job(job: CoregJob, target_path: Path, base_path: Path, db: Session, custom_params: dict | None = None) -> None:
+    """Process a coregistration job with optional custom parameters."""
     run_root = Path(job.coreg_output_path).parent.parent if job.coreg_output_path else ensure_dir(settings.output_root / f"job_{job.job_no:04d}")
     start = datetime.now(timezone.utc)
     log.info(
-        "Starting processing job_no=%s target=%s base=%s run_root=%s",
-        job.job_no,
-        target_path,
-        base_path,
-        run_root,
+        "Starting processing job_no=%s target=%s base=%s run_root=%s custom_params=%s",
+        job.job_no, target_path, base_path, run_root, "yes" if custom_params else "no",
     )
 
     job.status = "running"
@@ -284,55 +283,33 @@ def _process_job(job: CoregJob, target_path: Path, base_path: Path, db: Session)
     db.commit()
 
     try:
-        result = run_coregistration_and_cog(base_path, target_path, run_root)
- 
+        result = run_coregistration_and_cog(base_path, target_path, run_root, custom_params)
         
         log.info(
             "Coregistration finished job_no=%s coreg_output=%s cog_output=%s",
-            job.job_no,
-            result.get("coreg_output"),
-            result.get("cog_output"),
+            job.job_no, result.get("coreg_output"), result.get("cog_output"),
         )
         job.coreg_output_path = result["coreg_output"]
         job.cog_output_path = result["cog_output"]
 
         job.status = "completed"
         job.stage = "completed"
-
         job.completed_at = datetime.now(timezone.utc)
 
         _create_metrics_for_job(db, job, result)
 
-        job.runtime_seconds = round(
-            (job.completed_at - start).total_seconds(),
-            2,
-        )
+        job.runtime_seconds = round((job.completed_at - start).total_seconds(), 2)
 
         db.commit()
-        log.info(
-           "Job completed job_no=%s runtime_seconds=%s",
-            job.job_no,
-            job.runtime_seconds,
-           
-        )
+        log.info("Job completed job_no=%s runtime_seconds=%s", job.job_no, job.runtime_seconds)
     except Exception as exc:
-        
         db.rollback()
-        
         log.exception("Job failed job_no=%s target=%s base=%s", job.job_no, target_path, base_path)
         job.status = "failed"
         job.stage = "failed"
-
         job.error_message = str(exc)
-        
         job.completed_at = datetime.now(timezone.utc)
-        job.runtime_seconds = round(
-    (job.completed_at - start).total_seconds(),
-    2,
-    )
-        
-        
-           
+        job.runtime_seconds = round((job.completed_at - start).total_seconds(), 2)
         db.commit()
 
 
@@ -441,69 +418,55 @@ async def submit_job(
     db: Session = Depends(get_db),
 ):
     log.info(
-        "Manual job requested target=%s base=%s sensor=%s",
+        "Manual job requested target=%s base=%s sensor=%s use_custom_params=%s",
         request.target_path,
         request.base_path,
         request.sensor_name or "none",
+        request.use_custom_params,
     )
 
-    target_path = resolve_input_path(
-        settings.target_root,
-        request.target_path,
-    )
-
-    if not target_path.exists():
+    # Validate custom parameters mode: only one target allowed
+    if request.use_custom_params and not request.custom_params:
         raise HTTPException(
             status_code=400,
-            detail=f"Target file not found: {target_path}",
+            detail="Custom parameters enabled but no custom_params provided.",
         )
+
+    target_path = resolve_input_path(settings.target_root, request.target_path)
+
+    if not target_path.exists():
+        raise HTTPException(status_code=400, detail=f"Target file not found: {target_path}")
 
     base_path = (
         resolve_input_path(settings.base_root, request.base_path)
         if request.base_path
-        else _match_base_for_target(
-            target_path,
-            request.sensor_name,
-        )[0]
+        else _match_base_for_target(target_path, request.sensor_name)[0]
     )
 
     if base_path is None:
-        raise HTTPException(
-            status_code=400,
-            detail="No matching base image found.",
-        )
+        raise HTTPException(status_code=400, detail="No matching base image found.")
 
-    log.info(
-        "Manual job resolved target=%s base=%s",
-        target_path,
-        base_path,
-    )
+    log.info("Manual job resolved target=%s base=%s", target_path, base_path)
 
     job = _create_job(
         db,
         target_path=target_path,
         base_path=base_path,
-        sensor_name=request.sensor_name
-        or infer_sensor_label(str(target_path))
-        or "unknown",
+        sensor_name=request.sensor_name or infer_sensor_label(str(target_path)) or "unknown",
     )
 
     db.commit()
 
-    _process_job(
-        job,
-        target_path,
-        base_path,
-        db,
-    )
+    # Convert custom params to dict if provided
+    custom_params = None
+    if request.use_custom_params and request.custom_params:
+        custom_params = request.custom_params.model_dump()
+
+    _process_job(job, target_path, base_path, db, custom_params)
 
     db.refresh(job)
 
-    log.info(
-        "Manual job completed job_no=%s status=%s",
-        job.job_no,
-        job.status,
-    )
+    log.info("Manual job completed job_no=%s status=%s", job.job_no, job.status)
 
     return _job_to_response(job)
 

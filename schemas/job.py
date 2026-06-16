@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, ConfigDict
@@ -17,6 +17,21 @@ class JobLogResponse(BaseModel):
     timestamp: datetime
 
 
+class CoregParameters(BaseModel):
+    """Custom coregistration parameters for manual processing."""
+    grid_res: int = Field(2048, ge=512, le=8192, description="Grid resolution for tie point calculation")
+    window_size_x: int = Field(256, ge=64, le=2048, description="Window size X dimension")
+    window_size_y: int = Field(256, ge=64, le=2048, description="Window size Y dimension")
+    max_shift: float = Field(100.0, ge=0, le=1000, description="Maximum allowed shift in pixels")
+    tieP_filter_level: int = Field(3, ge=1, le=5, description="Tie point filter level (1-5)")
+    min_reliability: float = Field(40.0, ge=0, le=100, description="Minimum reliability percentage")
+    rs_max_outlier: int = Field(10, ge=1, le=100, description="Maximum outlier threshold")
+    CPUs: int = Field(12, ge=1, le=64, description="Number of CPU cores to use")
+    resamp_alg_calc: Literal["nearest", "cubic", "bilinear"] = Field("nearest", description="Resampling algorithm for calculation")
+    resamp_alg_deshift: Literal["nearest", "cubic", "bilinear"] = Field("nearest", description="Resampling algorithm for deshift")
+    match_gsd: bool = Field(True, description="Match GSD between reference and target")
+
+
 class JobCreateRequest(BaseModel):
     target_path: str = Field(..., description="Absolute or root-relative path to the target image")
     base_path: str | None = Field(None, description="Optional absolute or root-relative path to the base image")
@@ -26,6 +41,8 @@ class JobCreateRequest(BaseModel):
     cog_compression: str = Field("LZW")
     callback_url: str | None = None
     tags: dict[str, str] = Field(default_factory=dict)
+    use_custom_params: bool = Field(False, description="Enable custom coregistration parameters")
+    custom_params: CoregParameters | None = Field(None, description="Custom coregistration parameters (only used if use_custom_params=True)")
 
 
 class BatchJobCreateRequest(BaseModel):
