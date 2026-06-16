@@ -62,7 +62,22 @@ def _get_image_info(path: Path) -> dict:
     }
 
 
-def _choose_coreg_params(ref: Path, tgt: Path) -> dict:
+def _choose_coreg_params(ref: Path, tgt: Path, custom_params: dict | None = None) -> dict:
+    """Choose coregistration parameters, using custom params if provided."""
+    if custom_params:
+        return {
+            "grid_res": custom_params.get("grid_res", 2048),
+            "window_size": (custom_params.get("window_size_x", 256), custom_params.get("window_size_y", 256)),
+            "max_shift": custom_params.get("max_shift", 100),
+            "min_reliability": custom_params.get("min_reliability", 40),
+            "tieP_filter_level": custom_params.get("tieP_filter_level", 3),
+            "rs_max_outlier": custom_params.get("rs_max_outlier", 10),
+            "CPUs": custom_params.get("CPUs", 12),
+            "resamp_alg_calc": custom_params.get("resamp_alg_calc", "nearest"),
+            "resamp_alg_deshift": custom_params.get("resamp_alg_deshift", "nearest"),
+            "match_gsd": custom_params.get("match_gsd", True),
+        }
+    
     ref_info = _get_image_info(ref)
     tgt_info = _get_image_info(tgt)
 
@@ -76,6 +91,12 @@ def _choose_coreg_params(ref: Path, tgt: Path) -> dict:
         "window_size": (256, 256),
         "max_shift": 100,
         "min_reliability": 40,
+        "tieP_filter_level": 3,
+        "rs_max_outlier": 10,
+        "CPUs": 12,
+        "resamp_alg_calc": "nearest",
+        "resamp_alg_deshift": "nearest",
+        "match_gsd": True,
     }
 
     if ratio < 2:
@@ -112,6 +133,7 @@ def _run_arosics_coregistration(
     ref: Path,
     tgt: Path,
     out_img: Path,
+    custom_params: dict | None = None,
 ) -> dict[str, object]:
 
     try:
@@ -123,7 +145,7 @@ def _run_arosics_coregistration(
 
     ensure_dir(out_img.parent)
 
-    params = _choose_coreg_params(ref, tgt)
+    params = _choose_coreg_params(ref, tgt, custom_params)
 
     print(f"\nAdaptive parameters selected:")
     print(json.dumps(params, indent=2))
@@ -250,6 +272,7 @@ def run_coregistration_and_cog(
     ref: Path,
     tgt: Path,
     run_dir: Path,
+    custom_params: dict | None = None,
 ) -> dict[str, str]:
 
     ensure_dir(run_dir)
@@ -265,6 +288,7 @@ def run_coregistration_and_cog(
         ref,
         tgt,
         coreg_output,
+        custom_params,
     )
 
     if not coreg_output.exists():

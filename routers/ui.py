@@ -201,6 +201,122 @@ async def ui_page() -> HTMLResponse:
               </div>
             </div>
 
+            <div style="margin-top: 14px;">
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="useCustomParams" onchange="toggleCustomParams()">
+                <span style="font-size: 13px; color: var(--muted);">Use Custom Coregistration Parameters</span>
+              </label>
+              <div class="small" style="margin-top: 6px;">When enabled, you can only process ONE target image at a time with custom settings.</div>
+            </div>
+
+            <div id="customParamsSection" style="display: none; margin-top: 14px; padding: 14px; background: var(--soft); border-radius: 12px; border: 1px solid #bfe8e6;">
+              <div class="split">
+                <div>
+                  <label for="gridRes">Grid Resolution</label>
+                  <select id="gridRes">
+                    <option value="512">512</option>
+                    <option value="1024">1024</option>
+                    <option value="2048" selected>2048</option>
+                    <option value="4096">4096</option>
+                    <option value="8192">8192</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="windowSizeX">Window Size X</label>
+                  <select id="windowSizeX">
+                    <option value="64">64</option>
+                    <option value="128">128</option>
+                    <option value="256" selected>256</option>
+                    <option value="512">512</option>
+                    <option value="1024">1024</option>
+                    <option value="2048">2048</option>
+                  </select>
+                </div>
+              </div>
+              <div class="split" style="margin-top: 10px;">
+                <div>
+                  <label for="windowSizeY">Window Size Y</label>
+                  <select id="windowSizeY">
+                    <option value="64">64</option>
+                    <option value="128">128</option>
+                    <option value="256" selected>256</option>
+                    <option value="512">512</option>
+                    <option value="1024">1024</option>
+                    <option value="2048">2048</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="maxShift">Max Shift (pixels)</label>
+                  <input type="number" id="maxShift" value="100" min="0" max="1000" step="10">
+                </div>
+              </div>
+              <div class="split" style="margin-top: 10px;">
+                <div>
+                  <label for="tiePFilterLevel">Tie Point Filter Level</label>
+                  <select id="tiePFilterLevel">
+                    <option value="1">1 (lowest)</option>
+                    <option value="2">2</option>
+                    <option value="3" selected>3 (default)</option>
+                    <option value="4">4</option>
+                    <option value="5">5 (highest)</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="minReliability">Min Reliability (%)</label>
+                  <input type="number" id="minReliability" value="40" min="0" max="100" step="5">
+                </div>
+              </div>
+              <div class="split" style="margin-top: 10px;">
+                <div>
+                  <label for="rsMaxOutlier">RS Max Outlier</label>
+                  <select id="rsMaxOutlier">
+                    <option value="5">5</option>
+                    <option value="10" selected>10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="cpus">CPUs</label>
+                  <select id="cpus">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="4">4</option>
+                    <option value="8">8</option>
+                    <option value="12" selected>12</option>
+                    <option value="16">16</option>
+                    <option value="32">32</option>
+                    <option value="64">64</option>
+                  </select>
+                </div>
+              </div>
+              <div class="split" style="margin-top: 10px;">
+                <div>
+                  <label for="resampAlgCalc">Resampling (Calc)</label>
+                  <select id="resampAlgCalc">
+                    <option value="nearest" selected>Nearest</option>
+                    <option value="bilinear">Bilinear</option>
+                    <option value="cubic">Cubic</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="resampAlgDeshift">Resampling (Deshift)</label>
+                  <select id="resampAlgDeshift">
+                    <option value="nearest" selected>Nearest</option>
+                    <option value="bilinear">Bilinear</option>
+                    <option value="cubic">Cubic</option>
+                  </select>
+                </div>
+              </div>
+              <div style="margin-top: 10px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="checkbox" id="matchGsd" checked>
+                  <span style="font-size: 13px; color: var(--muted);">Match GSD</span>
+                </label>
+              </div>
+            </div>
+
             <div class="actions">
               <button class="secondary" onclick="scanFolders()">Scan Folders</button>
               <button class="primary" onclick="startPipeline()">Start Pipeline</button>
@@ -282,6 +398,38 @@ async def ui_page() -> HTMLResponse:
           return Array.from(document.getElementById(selectId).selectedOptions).map(option => option.value).filter(Boolean);
         }}
 
+        function toggleCustomParams() {{
+          const enabled = document.getElementById("useCustomParams").checked;
+          const section = document.getElementById("customParamsSection");
+          const targetSelect = document.getElementById("targetFile");
+          
+          if (enabled) {{
+            section.style.display = "block";
+            if (targetSelect.selectedOptions.length > 1) {{
+              targetSelect.selectedIndex = 0;
+              setJobStatus("Custom parameters mode: only ONE target can be selected.");
+            }}
+          }} else {{
+            section.style.display = "none";
+          }}
+        }}
+
+        function getCustomParams() {{
+          return {{
+            grid_res: parseInt(document.getElementById("gridRes").value, 10),
+            window_size_x: parseInt(document.getElementById("windowSizeX").value, 10),
+            window_size_y: parseInt(document.getElementById("windowSizeY").value, 10),
+            max_shift: parseFloat(document.getElementById("maxShift").value),
+            tieP_filter_level: parseInt(document.getElementById("tiePFilterLevel").value, 10),
+            min_reliability: parseFloat(document.getElementById("minReliability").value),
+            rs_max_outlier: parseInt(document.getElementById("rsMaxOutlier").value, 10),
+            CPUs: parseInt(document.getElementById("cpus").value, 10),
+            resamp_alg_calc: document.getElementById("resampAlgCalc").value,
+            resamp_alg_deshift: document.getElementById("resampAlgDeshift").value,
+            match_gsd: document.getElementById("matchGsd").checked
+          }};
+        }}
+
         async function refreshData() {{
           try {{
             const res = await fetch("/api/ui/bootstrap");
@@ -322,6 +470,7 @@ async def ui_page() -> HTMLResponse:
         }}
 
         async function startPipeline() {{
+          const useCustomParams = document.getElementById("useCustomParams").checked;
           const targets = getSelectedValues("targetFile");
 
           if (!targets.length) {{
@@ -329,25 +478,52 @@ async def ui_page() -> HTMLResponse:
             return;
           }}
 
-          const payload = {{
-            target_paths: targets,
-            priority: 5,
-            publish_to_geoserver: false,
-            cog_compression: "LZW",
-            tags: {{
-              source: "ui-auto"
+          // Custom params mode: only single target allowed
+          if (useCustomParams) {{
+            if (targets.length > 1) {{
+              setJobStatus("Custom parameters mode: only ONE target can be processed at a time.");
+              return;
             }}
-          }};
-
-          const res = await fetch("/api/jobs/auto-process", {{
-            method: "POST",
-            headers: {{ "Content-Type": "application/json" }},
-            body: JSON.stringify(payload)
-          }});
-          const data = await res.json();
-          setJobStatus(`Processed ${{targets.length}} target file(s).`);
-          showOutput(data);
-          await refreshJobs();
+            const customParams = getCustomParams();
+            const payload = {{
+              target_path: targets[0],
+              sensor_name: "Sentinel-2",
+              priority: 5,
+              publish_to_geoserver: false,
+              cog_compression: "LZW",
+              use_custom_params: true,
+              custom_params: customParams
+            }};
+            const res = await fetch("/api/jobs/process", {{
+              method: "POST",
+              headers: {{ "Content-Type": "application/json" }},
+              body: JSON.stringify(payload)
+            }});
+            const data = await res.json();
+            setJobStatus(`Processed with custom parameters.`);
+            showOutput(data);
+            await refreshJobs();
+          }} else {{
+            // Standard auto-process mode
+            const payload = {{
+              target_paths: targets,
+              priority: 5,
+              publish_to_geoserver: false,
+              cog_compression: "LZW",
+              tags: {{
+                source: "ui-auto"
+              }}
+            }};
+            const res = await fetch("/api/jobs/auto-process", {{
+              method: "POST",
+              headers: {{ "Content-Type": "application/json" }},
+              body: JSON.stringify(payload)
+            }});
+            const data = await res.json();
+            setJobStatus(`Processed ${{targets.length}} target file(s).`);
+            showOutput(data);
+            await refreshJobs();
+          }}
         }}
 
         async function scanFolders() {{
