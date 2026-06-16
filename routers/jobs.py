@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,15 +11,13 @@ from sqlalchemy.orm import Session
 from api.config import settings
 from api.coreg_service import run_coregistration_and_cog
 from api.db import get_db
-from api.models import CoregJob,  CoregMetrics, CoregParameter, CoregPixelSize, CoregSystemPerformance, CoregOverallStat
-
+from api.models import CoregJob, CoregMetrics, CoregOverallStat, CoregParameter, CoregPixelSize, CoregSystemPerformance
 from api.schemas.job import (
     AutoProcessItemResult,
     AutoProcessRequest,
     AutoProcessResponse,
     JobCreateRequest,
     JobDetailResponse,
-    
     JobResponse,
 )
 from api.utils import (
@@ -32,7 +29,6 @@ from api.utils import (
     resolve_input_path,
     shared_token_count,
 )
-
 
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
 log = logging.getLogger("api.jobs")
@@ -46,12 +42,7 @@ def _match_base_for_target(target_path: Path, preferred_sensor: str | None = Non
 
     sensor_hint = infer_sensor_label(preferred_sensor) if preferred_sensor else None
     scored_candidates: list[dict[str, object]] = []
-    log.info(
-        "Matching target=%s sensor_hint=%s against %d base files",
-        target_path,
-        sensor_hint or "none",
-        len(base_files),
-    )
+    log.info("Matching target=%s sensor_hint=%s against %d base files", target_path, sensor_hint or "none", len(base_files))
 
     for candidate in base_files:
         metrics = geo_overlap_metrics(target_path, candidate)
@@ -59,87 +50,59 @@ def _match_base_for_target(target_path: Path, preferred_sensor: str | None = Non
         sensor_score = 1 if sensor_hint and candidate_sensor == sensor_hint else 0
         gsd = gdal_pixel_size(candidate)
         geo_available = metrics is not None
-        geo_overlap = float(metrics["intersection_area"]) if metrics is not None else 0.0
-        bbox_overlap = float(metrics["bbox_overlap_pct"]) if metrics is not None else 0.0
-        extent_overlap = float(metrics["extent_intersection_pct"]) if metrics is not None else 0.0
-        geometry_overlap = float(metrics["geometry_overlap_pct"]) if metrics is not None else 0.0
-        latlon_overlap = float(metrics["latlon_overlap_pct"]) if metrics is not None else 0.0
+        geo_overlap = float(metrics["intersection_area"]) if metrics else 0.0
+        bbox_overlap = float(metrics["bbox_overlap_pct"]) if metrics else 0.0
+        extent_overlap = float(metrics["extent_intersection_pct"]) if metrics else 0.0
+        geometry_overlap = float(metrics["geometry_overlap_pct"]) if metrics else 0.0
+        latlon_overlap = float(metrics["latlon_overlap_pct"]) if metrics else 0.0
         token_score = shared_token_count(target_path, candidate)
         has_geo_match = geo_available and geo_overlap > 0
 
         log.info(
             "Candidate=%s geo_available=%s geo_overlap=%.3f crs_match=%s bbox_overlap=%.3f extent_intersection=%.3f geometry_overlap=%.3f latlon_overlap=%.3f sensor=%s token_score=%s gsd=%s",
-            candidate,
-            geo_available,
-            geo_overlap,
-            metrics["same_crs"] if metrics is not None else False,
-            bbox_overlap,
-            extent_overlap,
-            geometry_overlap,
-            latlon_overlap,
-            candidate_sensor or "unknown",
-            token_score,
-            gsd if gsd is not None else "unknown",
+            candidate, geo_available, geo_overlap, metrics["same_crs"] if metrics else False,
+            bbox_overlap, extent_overlap, geometry_overlap, latlon_overlap,
+            candidate_sensor or "unknown", token_score, gsd if gsd else "unknown",
         )
-        scored_candidates.append(
-            {
-                "path": candidate,
-                "has_geo_match": 1 if has_geo_match else 0,
-                "same_crs": 1 if (metrics is not None and metrics["same_crs"]) else 0,
-                "geometry_overlap_pct": geometry_overlap,
-                "bbox_overlap_pct": bbox_overlap,
-                "latlon_overlap_pct": latlon_overlap,
-                "extent_intersection_pct": extent_overlap,
-                "sensor_score": sensor_score,
-                "token_score": token_score,
-                "gsd": gsd if gsd is not None else float("inf"),
-                "metrics": metrics,
-            }
-        )
+        scored_candidates.append({
+            "path": candidate,
+            "has_geo_match": 1 if has_geo_match else 0,
+            "same_crs": 1 if (metrics and metrics["same_crs"]) else 0,
+            "geometry_overlap_pct": geometry_overlap,
+            "bbox_overlap_pct": bbox_overlap,
+            "latlon_overlap_pct": latlon_overlap,
+            "extent_intersection_pct": extent_overlap,
+            "sensor_score": sensor_score,
+            "token_score": token_score,
+            "gsd": gsd if gsd else float("inf"),
+            "metrics": metrics,
+        })
 
     if not scored_candidates:
         log.warning("No overlapping base candidate found for target=%s", target_path)
         return None, f"No geospatial overlap found for target '{target_path.name}' in BASE_ROOT."
 
-    geo_candidates = [item for item in scored_candidates if int(item["has_geo_match"]) > 0]
+    geo_candidates = [item for item in scored_candidates if item["has_geo_match"]]
     candidate_pool = geo_candidates if geo_candidates else scored_candidates
     if not geo_candidates:
-        log.warning(
-            "No geospatial overlap detected for target=%s; falling back to filename/sensor token matching.",
-            target_path,
-        )
+        log.warning("No geospatial overlap detected for target=%s; falling back to filename/sensor token matching.", target_path)
 
     candidate_pool.sort(
         key=lambda item: (
-            int(item["has_geo_match"]),
-            int(item["same_crs"]),
-            float(item["geometry_overlap_pct"]),
-            float(item["bbox_overlap_pct"]),
-            float(item["latlon_overlap_pct"]),
-            float(item["extent_intersection_pct"]),
-            int(item["sensor_score"]),
-            int(item["token_score"]),
-            -float(item["gsd"]),
-            str(item["path"]).lower(),
+            item["has_geo_match"], item["same_crs"], item["geometry_overlap_pct"],
+            item["bbox_overlap_pct"], item["latlon_overlap_pct"], item["extent_intersection_pct"],
+            item["sensor_score"], item["token_score"], -float(item["gsd"]), str(item["path"]).lower(),
         ),
         reverse=True,
     )
     chosen = candidate_pool[0]["path"]
     metrics = candidate_pool[0]["metrics"]
 
-    if metrics is not None and int(candidate_pool[0]["has_geo_match"]) > 0:
+    if metrics and candidate_pool[0]["has_geo_match"]:
         crs_text = "CRS match" if metrics["same_crs"] else "CRS transformed"
-        reason = (
-            f"matched by {crs_text}, bbox overlap {metrics['bbox_overlap_pct']}%, "
-            f"extent intersection {metrics['extent_intersection_pct']}%, "
-            f"geometry overlap {metrics['geometry_overlap_pct']}%, "
-            f"lat/lon overlap {metrics['latlon_overlap_pct']}%."
-        )
+        reason = f"matched by {crs_text}, bbox overlap {metrics['bbox_overlap_pct']}%, extent intersection {metrics['extent_intersection_pct']}%, geometry overlap {metrics['geometry_overlap_pct']}%, lat/lon overlap {metrics['latlon_overlap_pct']}%."
     else:
-        reason = (
-            f"used fallback token/sensor match for target '{target_path.stem}' "
-            f"against base '{chosen.stem}'."
-        )
+        reason = f"used fallback token/sensor match for target '{target_path.stem}' against base '{chosen.stem}'."
 
     log.info("Selected base=%s for target=%s reason=%s", chosen, target_path, reason)
     return chosen, reason
@@ -154,85 +117,42 @@ def _new_job_no_path(job_no: int, target_path: Path) -> tuple[Path, Path, Path]:
     return run_root, coreg_output, cog_output
 
 
-def _create_job(
-    db: Session,
-    *,
-    target_path: Path,
-    base_path: Path,
-    sensor_name: str,
-) -> CoregJob:
-    now = datetime.now(timezone.utc)
+def _get_sensor_name(target_path: Path, provided_name: str | None) -> str:
+    return provided_name or infer_sensor_label(str(target_path)) or "unknown"
 
-    log.info(
-        "Creating job for target=%s base=%s",
-    target_path,
-    base_path,
-       
-    )
 
+def _create_job(db: Session, target_path: Path, base_path: Path, sensor_name: str) -> CoregJob:
     job = CoregJob(
-        status="queued",
-        stage="queued",
-        sensor_name=sensor_name
-        or infer_sensor_label(str(target_path))
-        or "unknown",
-        reference_image=str(base_path),
-        target_image=str(target_path),
-        runtime_seconds=0.0,
-        created_at=now,
+        status="queued", stage="queued", sensor_name=sensor_name,
+        reference_image=str(base_path), target_image=str(target_path),
+        runtime_seconds=0.0, created_at=datetime.now(timezone.utc),
     )
-
     db.add(job)
     db.flush()
 
-    _, coreg_output, cog_output = _new_job_no_path(
-        job.job_no,
-        target_path,
-    )
-
-    log.info(
-        "Allocated job_no=%s run_root=%s coreg_output=%s cog_output=%s",
-        job.job_no,
-        coreg_output.parent.parent,
-        coreg_output,
-        cog_output,
-    )
-
+    _, coreg_output, cog_output = _new_job_no_path(job.job_no, target_path)
+    log.info("Allocated job_no=%s run_root=%s coreg_output=%s cog_output=%s", job.job_no, coreg_output.parent.parent, coreg_output, cog_output)
     job.coreg_output_path = str(coreg_output)
     job.cog_output_path = str(cog_output)
-
     db.flush()
-
     return job
 
 
 def _job_to_response(job: CoregJob) -> JobResponse:
-    payload = {
-        "job_no": job.job_no or 0,
-        "status": job.status,
-        "stage": job.stage,
-        "sensor_name": job.sensor_name,
-        "reference_image": job.reference_image,
-        "target_image": job.target_image,
-        "coreg_output_path": job.coreg_output_path,
-        "cog_output_path": job.cog_output_path,
-        "created_at": job.created_at,
-        "started_at": job.started_at,
-        "completed_at": job.completed_at,
-        "runtime_seconds": job.runtime_seconds,
-        "error_message": job.error_message,
-    }
-
-    return JobResponse.model_validate(payload)
-    
+    return JobResponse.model_validate({
+        "job_no": job.job_no or 0, "status": job.status, "stage": job.stage,
+        "sensor_name": job.sensor_name, "reference_image": job.reference_image,
+        "target_image": job.target_image, "coreg_output_path": job.coreg_output_path,
+        "cog_output_path": job.cog_output_path, "created_at": job.created_at,
+        "started_at": job.started_at, "completed_at": job.completed_at,
+        "runtime_seconds": job.runtime_seconds, "error_message": job.error_message,
+    })
 
 
 def _job_to_detail(job: CoregJob) -> JobDetailResponse:
     payload = _job_to_response(job).model_dump()
-
     if job.metrics:
         payload["quality"] = job.metrics.quality
-
     return JobDetailResponse.model_validate(payload)
 
 def _create_metrics_for_job(db: Session, job: CoregJob, result: dict) -> None:
