@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from api.bootstrap import ensure_schema
 from api.db import Base, engine
-from api.routers import jobs, ui
+from api.routers import jobs, ui, scheduler
 
 
 @asynccontextmanager
@@ -23,6 +23,7 @@ app = FastAPI(
 
 app.include_router(jobs.router, prefix="/api")
 app.include_router(ui.router)
+app.include_router(scheduler.router, prefix="/api")
 
 
 @app.get("/")

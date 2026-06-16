@@ -221,6 +221,47 @@ async def ui_page() -> HTMLResponse:
 
         <div class="card" style="margin-top:18px;">
           <div class="section-title">
+            <h2>Scheduler Configuration</h2>
+            <span class="badge">Auto-scan</span>
+          </div>
+          <div class="split">
+            <div>
+              <label for="schedulerInterval">Scan Interval</label>
+              <select id="schedulerInterval">
+                <option value="1">1 minute</option>
+                <option value="5">5 minutes</option>
+                <option value="10">10 minutes</option>
+                <option value="15">15 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="60" selected>1 hour</option>
+                <option value="120">2 hours</option>
+                <option value="180">3 hours</option>
+                <option value="360">6 hours</option>
+                <option value="720">12 hours</option>
+                <option value="1440">24 hours</option>
+              </select>
+              <div class="small">How often to scan folders for new files.</div>
+            </div>
+            <div>
+              <label for="schedulerEnabled">Scheduler Status</label>
+              <select id="schedulerEnabled">
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+              <div class="small">Enable or disable automatic scanning.</div>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="secondary" onclick="loadSchedulerConfig()">Load Config</button>
+            <button class="primary" onclick="saveSchedulerConfig()">Save Config</button>
+            <button class="secondary" onclick="toggleScheduler()">Toggle Scheduler</button>
+            <button class="secondary" onclick="manualScan()">Manual Scan</button>
+          </div>
+          <div class="status" id="schedulerStatus">Loading scheduler config...</div>
+        </div>
+
+        <div class="card" style="margin-top:18px;">
+          <div class="section-title">
             <h2>API Response</h2>
             <span class="badge">Live result</span>
           </div>
@@ -317,7 +358,85 @@ async def ui_page() -> HTMLResponse:
           await refreshData();
         }}
 
+        async function loadSchedulerConfig() {{
+          try {{
+            const res = await fetch("/api/scheduler/config");
+            const data = await res.json();
+            document.getElementById("schedulerEnabled").value = String(data.enabled);
+            if (data.configs && data.configs.length > 0) {{
+              const interval = data.configs[0].interval_minutes || 60;
+              document.getElementById("schedulerInterval").value = String(interval);
+            }}
+            document.getElementById("schedulerStatus").textContent = `Loaded config. Last scan: ${{data.last_scan_at || "Never"}}`;
+            showOutput(data);
+          }} catch (err) {{
+            document.getElementById("schedulerStatus").textContent = "Failed to load scheduler config.";
+            showOutput(String(err));
+          }}
+        }}
+
+        async function saveSchedulerConfig() {{
+          try {{
+            const interval = parseInt(document.getElementById("schedulerInterval").value, 10);
+            const enabled = document.getElementById("schedulerEnabled").value === "true";
+            const payload = {{
+              folders: [
+                {{ path: "/api/settings/target_root", recursive: true, sensor_hint: "target" }},
+                {{ path: "/api/settings/base_root", recursive: true, sensor_hint: "base" }}
+              ],
+              interval_minutes: interval,
+              min_overlap_pct: 10.0,
+              max_cloud_cover_pct: 80.0,
+              enabled: enabled
+            }};
+            const res = await fetch("/api/scheduler/config", {{
+              method: "PUT",
+              headers: {{ "Content-Type": "application/json" }},
+              body: JSON.stringify(payload)
+            }});
+            const data = await res.json();
+            document.getElementById("schedulerStatus").textContent = `Config saved. Interval: ${{interval}} min, Enabled: ${{enabled}}`;
+            showOutput(data);
+          }} catch (err) {{
+            document.getElementById("schedulerStatus").textContent = "Failed to save scheduler config.";
+            showOutput(String(err));
+          }}
+        }}
+
+        async function toggleScheduler() {{
+          try {{
+            const currentEnabled = document.getElementById("schedulerEnabled").value === "true";
+            const newEnabled = !currentEnabled;
+            const res = await fetch(`/api/scheduler/toggle?active=${{newEnabled}}`, {{
+              method: "POST"
+            }});
+            const data = await res.json();
+            document.getElementById("schedulerEnabled").value = String(newEnabled);
+            document.getElementById("schedulerStatus").textContent = `Scheduler ${{newEnabled ? "enabled" : "disabled"}}`;
+            showOutput(data);
+          }} catch (err) {{
+            document.getElementById("schedulerStatus").textContent = "Failed to toggle scheduler.";
+            showOutput(String(err));
+          }}
+        }}
+
+        async function manualScan() {{
+          try {{
+            const res = await fetch("/api/scheduler/scan", {{
+              method: "POST"
+            }});
+            const data = await res.json();
+            document.getElementById("schedulerStatus").textContent = `Manual scan complete. Found ${{data.discovered_files?.length || 0}} files.`;
+            showOutput(data);
+            await refreshData();
+          }} catch (err) {{
+            document.getElementById("schedulerStatus").textContent = "Failed to run manual scan.";
+            showOutput(String(err));
+          }}
+        }}
+
         refreshData().catch(err => showOutput(String(err)));
+        loadSchedulerConfig().catch(err => showOutput(String(err)));
       </script>
     </body>
     </html>
