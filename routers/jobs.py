@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from api.config import settings
 from api.coreg_service import run_coregistration_and_cog
 from api.db import get_db
-from api.models import CoregJob
+from api.models import CoregJob,  CoregMetrics, CoregParameter, CoregPixelSize, CoregSystemPerformance, CoregOverallStat
 
 from api.schemas.job import (
     AutoProcessItemResult,
@@ -32,6 +32,7 @@ from api.utils import (
     resolve_input_path,
     shared_token_count,
 )
+
 
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
 log = logging.getLogger("api.jobs")
@@ -234,6 +235,116 @@ def _job_to_detail(job: CoregJob) -> JobDetailResponse:
 
     return JobDetailResponse.model_validate(payload)
 
+def _create_metrics_for_job(db: Session, job: CoregJob, result: dict) -> None:
+    """Create and persist CoregMetrics and all related child records after successful coregistration."""
+    import psutil
+    
+    existing = db.scalar(
+    select(CoregMetrics).where(
+        CoregMetrics.job_id == job.id
+    )
+    )
+
+    if existing:
+        return
+
+    metrics = CoregMetrics(
+        job_id=job.id,
+        quality=result.get("quality"),
+    )
+    db.add(metrics)
+    db.flush()
+
+    params = result.get("parameters", {})
+    parameter = CoregParameter(
+        metrics_id=metrics.id,
+        im_ref=job.reference_image,
+        im_tgt=job.target_image,
+        grid_res=params.get("grid_res", 0),
+        window_x=params.get("window_size", (0, 0))[0] if isinstance(params.get("window_size"), tuple) else 0,
+        window_y=params.get("window_size", (0, 0))[1] if isinstance(params.get("window_size"), tuple) else 0,
+        max_shift=params.get("max_shift", 0.0),
+        tieP_filter_level=3,
+        min_reliability=params.get("min_reliability", 0.0),
+        rs_max_outlier=10,
+        CPUs=12,
+        fmt_out=params.get("fmt_out", "GTiff"),
+        path_out=params.get("path_out", str(job.coreg_output_path)),
+        resamp_alg_calc=params.get("resamp_alg_calc", "nearest"),
+        resamp_alg_deshift=params.get("resamp_alg_deshift", "nearest"),
+        match_gsd=params.get("match_gsd", True),
+        q=params.get("q", False),
+    )
+    db.add(parameter)
+
+    try:
+        from osgeo import gdal
+        tgt_ds = gdal.Open(job.target_image)
+        out_ds = gdal.Open(job.coreg_output_path) if job.coreg_output_path else None
+
+        target_gt = tgt_ds.GetGeoTransform() if tgt_ds else (0, 0, 0, 0, 0, 0)
+        output_gt = out_ds.GetGeoTransform() if out_ds else (0, 0, 0, 0, 0, 0)
+
+        pixel_size = CoregPixelSize(
+            metrics_id=metrics.id,
+            target_x=abs(target_gt[1]) if target_gt else 0.0,
+            target_y=abs(target_gt[5]) if target_gt else 0.0,
+            output_x=abs(output_gt[1]) if output_gt else 0.0,
+            output_y=abs(output_gt[5]) if output_gt else 0.0,
+        )
+        db.add(pixel_size)
+    except Exception:
+        pass
+
+    process = psutil.Process()
+    cpu_percent = psutil.cpu_percent(interval=0.1)
+    mem_info = process.memory_info()
+    vmem = psutil.virtual_memory()
+
+    system_perf = CoregSystemPerformance(
+        metrics_id=metrics.id,
+        cpu_percent=cpu_percent,
+        cores=psutil.cpu_count(logical=False) or 1,
+        ram_total_gb=vmem.total / (1024**3),
+        ram_available_gb=vmem.available / (1024**3),
+        ram_used_gb=vmem.used / (1024**3),
+        ram_percent=vmem.percent,
+        process_ram_gb=mem_info.rss / (1024**3),
+        disk_read_mb=getattr(process.io_counters(), 'read_bytes', 0) / (1024**2) if hasattr(process, 'io_counters') else 0.0,
+        disk_write_mb=getattr(process.io_counters(), 'write_bytes', 0) / (1024**2) if hasattr(process, 'io_counters') else 0.0,
+        process_threads=process.num_threads(),
+    )
+    db.add(system_perf)
+
+    overall_stat = CoregOverallStat(
+        metrics_id=metrics.id,
+        N_TP=result.get("matched_points", 0),
+        valid_tiepoints=result.get("valid_points", 0),
+        invalid_tiepoints=max(0, result.get("matched_points", 0) - result.get("valid_points", 0)),
+        valid_percent=(result.get("valid_points", 0) / result.get("matched_points", 1)) * 100 if result.get("matched_points", 0) > 0 else 0.0,
+        invalid_percent=100.0 - ((result.get("valid_points", 0) / result.get("matched_points", 1)) * 100 if result.get("matched_points", 0) > 0 else 0.0),
+        RMSE_X=0.0,
+        RMSE_Y=0.0,
+        RMSE_M=0.0,
+        RMSE_PX=0.0,
+        MSE_X=0.0,
+        MSE_Y=0.0,
+        MAE_X=0.0,
+        MAE_Y=0.0,
+        SHIFT_MEAN=0.0,
+        SHIFT_MEDIAN=0.0,
+        SHIFT_STD=0.0,
+        SHIFT_MIN=0.0,
+        SHIFT_MAX=0.0,
+        ANGLE_MEAN=0.0,
+        SSIM_MEAN=0.0,
+        RELIABILITY_MEAN=0.0,
+        RELIABILITY_MEDIAN=0.0,
+    )
+    db.add(overall_stat)
+
+    job.metrics = metrics
+    db.flush()
 
 def _process_job(job: CoregJob, target_path: Path, base_path: Path, db: Session) -> None:
     run_root = Path(job.coreg_output_path).parent.parent if job.coreg_output_path else ensure_dir(settings.output_root / f"job_{job.job_no:04d}")
@@ -254,6 +365,8 @@ def _process_job(job: CoregJob, target_path: Path, base_path: Path, db: Session)
 
     try:
         result = run_coregistration_and_cog(base_path, target_path, run_root)
+ 
+        
         log.info(
             "Coregistration finished job_no=%s coreg_output=%s cog_output=%s",
             job.job_no,
@@ -268,6 +381,8 @@ def _process_job(job: CoregJob, target_path: Path, base_path: Path, db: Session)
 
         job.completed_at = datetime.now(timezone.utc)
 
+        _create_metrics_for_job(db, job, result)
+
         job.runtime_seconds = round(
             (job.completed_at - start).total_seconds(),
             2,
@@ -281,6 +396,9 @@ def _process_job(job: CoregJob, target_path: Path, base_path: Path, db: Session)
            
         )
     except Exception as exc:
+        
+        db.rollback()
+        
         log.exception("Job failed job_no=%s target=%s base=%s", job.job_no, target_path, base_path)
         job.status = "failed"
         job.stage = "failed"
