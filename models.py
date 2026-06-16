@@ -336,3 +336,39 @@ class CoregOverallStat(Base):
     metrics: Mapped["CoregMetrics"] = relationship(
         back_populates="overall_stat"
     )
+
+
+# ============================================================
+# SCHEDULER CONFIG
+# ============================================================
+
+class SchedulerConfig(Base):
+    __tablename__ = "scheduler_config"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    folder_path: Mapped[str] = mapped_column(Text, nullable=False)
+    recursive: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sensor_hint: Mapped[str | None] = mapped_column(String(64))
+    
+    interval_minutes: Mapped[int] = mapped_column(
+        Integer,
+        default=60,
+        nullable=False,
+    )
+    
+    min_overlap_pct: Mapped[float] = mapped_column(Float, default=10.0)
+    max_cloud_cover_pct: Mapped[float] = mapped_column(Float, default=80.0)
+    
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    
+    last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )

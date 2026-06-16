@@ -12,6 +12,7 @@ from api.models import (
     CoregPixelSize,
     CoregSystemPerformance,
     CoregOverallStat,
+    SchedulerConfig,
 )
 
 

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_db
 from api.config import settings
-from api.models import CoregSchedulerConfig
+from api.models import SchedulerConfig
 from api.schemas.scheduler import SchedulerConfigRequest, SchedulerConfigResponse, SchedulerStatusResponse
 from api.utils import list_image_files
 
