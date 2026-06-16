@@ -1,11 +1,1 @@
-(empty)__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-venv/
-.venv/
-.env
-
-.vscode/
-.idea/
+Nothing should be ignored based on the provided file changes. The only modified file is 'routers/jobs.py', which is a source code file and should not be added to .gitignore. No build artifacts, dependencies, or temporary files are present in the changes.
