@@ -19,15 +19,17 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from api.db import Base
 
 
-def utcnow() -> datetime:
+def utc_now() -> datetime:
+    """Return current UTC datetime."""
     return datetime.now(timezone.utc)
 
 
 # ============================================================
-# COREG JOB
+# COREGISTRATION JOB
 # ============================================================
 
-class CoregJob(Base):
+class CoregistrationJob(Base):
+    """Represents a coregistration processing job."""
     __tablename__ = "coreg_job"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -36,7 +38,7 @@ class CoregJob(Base):
         default=uuid.uuid4,
     )
 
-    job_no: Mapped[int] = mapped_column(
+    job_number: Mapped[int] = mapped_column(
         Integer,
         Sequence("coreg_job_no_seq", start=1000),
         unique=True,
@@ -51,31 +53,31 @@ class CoregJob(Base):
         index=True,
     )
 
-    stage: Mapped[str] = mapped_column(
+    processing_stage: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
         default="queued",
     )
 
-    sensor_name: Mapped[str] = mapped_column(
+    sensor_type: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
     )
 
-    reference_image: Mapped[str] = mapped_column(
+    reference_image_path: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
 
-    target_image: Mapped[str] = mapped_column(
+    target_image_path: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
 
-    coreg_output_path: Mapped[str | None] = mapped_column(Text)
-    cog_output_path: Mapped[str | None] = mapped_column(Text)
+    coregistered_output_path: Mapped[str | None] = mapped_column(Text)
+    cloud_optimized_output_path: Mapped[str | None] = mapped_column(Text)
 
-    runtime_seconds: Mapped[float] = mapped_column(
+    processing_duration_seconds: Mapped[float] = mapped_column(
         Float,
         default=0.0,
         nullable=False,
@@ -83,7 +85,7 @@ class CoregJob(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=utcnow,
+        default=utc_now,
     )
 
     started_at: Mapped[datetime | None] = mapped_column(
@@ -96,7 +98,7 @@ class CoregJob(Base):
 
     error_message: Mapped[str | None] = mapped_column(Text)
 
-    metrics: Mapped["CoregMetrics"] = relationship(
+    metrics: Mapped["CoregistrationMetrics"] = relationship(
         back_populates="job",
         uselist=False,
         cascade="all, delete-orphan",
@@ -104,10 +106,11 @@ class CoregJob(Base):
 
 
 # ============================================================
-# HUB TABLE
+# HUB TABLE - COREGISTRATION METRICS
 # ============================================================
 
-class CoregMetrics(Base):
+class CoregistrationMetrics(Base):
+    """Stores quality metrics and results for a coregistration job."""
     __tablename__ = "coreg_metrics"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -123,47 +126,48 @@ class CoregMetrics(Base):
         nullable=False,
     )
 
-    quality: Mapped[str | None] = mapped_column(String(32))
+    quality_rating: Mapped[str | None] = mapped_column(String(32))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=utcnow,
+        default=utc_now,
     )
 
-    job: Mapped["CoregJob"] = relationship(
+    job: Mapped["CoregistrationJob"] = relationship(
         back_populates="metrics"
     )
 
-    parameters: Mapped["CoregParameter"] = relationship(
-        back_populates="metrics",
+    parameters: Mapped["CoregistrationParameters"] = relationship(
+        back_populates="metrics_record",
         uselist=False,
         cascade="all, delete-orphan",
     )
 
-    pixel_size: Mapped["CoregPixelSize"] = relationship(
-        back_populates="metrics",
+    pixel_size_info: Mapped["CoregistrationPixelSize"] = relationship(
+        back_populates="metrics_record",
         uselist=False,
         cascade="all, delete-orphan",
     )
 
-    system_performance: Mapped["CoregSystemPerformance"] = relationship(
-        back_populates="metrics",
+    system_performance: Mapped["SystemPerformanceMetrics"] = relationship(
+        back_populates="metrics_record",
         uselist=False,
         cascade="all, delete-orphan",
     )
 
-    overall_stat: Mapped["CoregOverallStat"] = relationship(
-        back_populates="metrics",
+    overall_statistics: Mapped["OverallStatistics"] = relationship(
+        back_populates="metrics_record",
         uselist=False,
         cascade="all, delete-orphan",
     )
 
 
 # ============================================================
-# PARAMETERS
+# COREGISTRATION PARAMETERS
 # ============================================================
 
-class CoregParameter(Base):
+class CoregistrationParameters(Base):
+    """Stores processing parameters used for coregistration."""
     __tablename__ = "coreg_parameter"
 
     id: Mapped[int] = mapped_column(
@@ -178,46 +182,47 @@ class CoregParameter(Base):
         unique=True,
     )
 
-    im_ref: Mapped[str] = mapped_column(Text)
-    im_tgt: Mapped[str] = mapped_column(Text)
+    reference_image_path: Mapped[str] = mapped_column(Text)
+    target_image_path: Mapped[str] = mapped_column(Text)
 
-    grid_res: Mapped[int] = mapped_column(Integer)
+    grid_resolution: Mapped[int] = mapped_column(Integer)
 
-    window_x: Mapped[int] = mapped_column(Integer)
-    window_y: Mapped[int] = mapped_column(Integer)
+    window_width: Mapped[int] = mapped_column(Integer)
+    window_height: Mapped[int] = mapped_column(Integer)
 
-    max_shift: Mapped[float] = mapped_column(Float)
+    maximum_shift_pixels: Mapped[float] = mapped_column(Float)
 
-    tieP_filter_level: Mapped[int] = mapped_column(Integer)
+    tiepoint_filter_level: Mapped[int] = mapped_column(Integer)
 
-    min_reliability: Mapped[float] = mapped_column(Float)
+    minimum_reliability_percent: Mapped[float] = mapped_column(Float)
 
-    rs_max_outlier: Mapped[int] = mapped_column(Integer)
+    ransac_maximum_outliers: Mapped[int] = mapped_column(Integer)
 
-    CPUs: Mapped[int] = mapped_column(Integer)
+    cpu_cores_used: Mapped[int] = mapped_column(Integer)
 
-    fmt_out: Mapped[str] = mapped_column(String(32))
+    output_format: Mapped[str] = mapped_column(String(32))
 
-    path_out: Mapped[str] = mapped_column(Text)
+    output_directory: Mapped[str] = mapped_column(Text)
 
-    resamp_alg_calc: Mapped[str] = mapped_column(String(32))
+    resampling_algorithm_calculation: Mapped[str] = mapped_column(String(32))
 
-    resamp_alg_deshift: Mapped[str] = mapped_column(String(32))
+    resampling_algorithm_deshift: Mapped[str] = mapped_column(String(32))
 
-    match_gsd: Mapped[bool] = mapped_column(Boolean)
+    match_ground_sample_distance: Mapped[bool] = mapped_column(Boolean)
 
-    q: Mapped[bool] = mapped_column(Boolean)
+    quiet_mode: Mapped[bool] = mapped_column(Boolean)
 
-    metrics: Mapped["CoregMetrics"] = relationship(
+    metrics_record: Mapped["CoregistrationMetrics"] = relationship(
         back_populates="parameters"
     )
 
 
 # ============================================================
-# PIXEL SIZE
+# PIXEL SIZE INFORMATION
 # ============================================================
 
-class CoregPixelSize(Base):
+class CoregistrationPixelSize(Base):
+    """Stores pixel size (ground sample distance) information."""
     __tablename__ = "coreg_pixel_size"
 
     id: Mapped[int] = mapped_column(
@@ -232,22 +237,23 @@ class CoregPixelSize(Base):
         unique=True,
     )
 
-    target_x: Mapped[float] = mapped_column(Float)
-    target_y: Mapped[float] = mapped_column(Float)
+    target_pixel_size_x: Mapped[float] = mapped_column(Float)
+    target_pixel_size_y: Mapped[float] = mapped_column(Float)
 
-    output_x: Mapped[float] = mapped_column(Float)
-    output_y: Mapped[float] = mapped_column(Float)
+    output_pixel_size_x: Mapped[float] = mapped_column(Float)
+    output_pixel_size_y: Mapped[float] = mapped_column(Float)
 
-    metrics: Mapped["CoregMetrics"] = relationship(
-        back_populates="pixel_size"
+    metrics_record: Mapped["CoregistrationMetrics"] = relationship(
+        back_populates="pixel_size_info"
     )
 
 
 # ============================================================
-# SYSTEM PERFORMANCE
+# SYSTEM PERFORMANCE METRICS
 # ============================================================
 
-class CoregSystemPerformance(Base):
+class SystemPerformanceMetrics(Base):
+    """Stores system resource usage during processing."""
     __tablename__ = "coreg_system_performance"
 
     id: Mapped[int] = mapped_column(
@@ -262,31 +268,32 @@ class CoregSystemPerformance(Base):
         unique=True,
     )
 
-    cpu_percent: Mapped[float] = mapped_column(Float)
-    cores: Mapped[int] = mapped_column(Integer)
+    cpu_usage_percent: Mapped[float] = mapped_column(Float)
+    cpu_cores_count: Mapped[int] = mapped_column(Integer)
 
     ram_total_gb: Mapped[float] = mapped_column(Float)
     ram_available_gb: Mapped[float] = mapped_column(Float)
     ram_used_gb: Mapped[float] = mapped_column(Float)
-    ram_percent: Mapped[float] = mapped_column(Float)
+    ram_usage_percent: Mapped[float] = mapped_column(Float)
 
-    process_ram_gb: Mapped[float] = mapped_column(Float)
+    process_memory_gb: Mapped[float] = mapped_column(Float)
 
     disk_read_mb: Mapped[float] = mapped_column(Float)
     disk_write_mb: Mapped[float] = mapped_column(Float)
 
-    process_threads: Mapped[int] = mapped_column(Integer)
+    process_thread_count: Mapped[int] = mapped_column(Integer)
 
-    metrics: Mapped["CoregMetrics"] = relationship(
+    metrics_record: Mapped["CoregistrationMetrics"] = relationship(
         back_populates="system_performance"
     )
 
 
 # ============================================================
-# OVERALL STATS
+# OVERALL STATISTICS
 # ============================================================
 
-class CoregOverallStat(Base):
+class OverallStatistics(Base):
+    """Stores statistical results from coregistration analysis."""
     __tablename__ = "coreg_overall_stat"
 
     id: Mapped[int] = mapped_column(
@@ -301,7 +308,7 @@ class CoregOverallStat(Base):
         unique=True,
     )
 
-    N_TP: Mapped[int] = mapped_column(Integer)
+    total_tiepoints: Mapped[int] = mapped_column(Integer)
 
     valid_tiepoints: Mapped[int] = mapped_column(Integer)
     invalid_tiepoints: Mapped[int] = mapped_column(Integer)
@@ -309,40 +316,41 @@ class CoregOverallStat(Base):
     valid_percent: Mapped[float] = mapped_column(Float)
     invalid_percent: Mapped[float] = mapped_column(Float)
 
-    RMSE_X: Mapped[float] = mapped_column(Float)
-    RMSE_Y: Mapped[float] = mapped_column(Float)
-    RMSE_M: Mapped[float] = mapped_column(Float)
-    RMSE_PX: Mapped[float] = mapped_column(Float)
+    rmse_x: Mapped[float] = mapped_column(Float)
+    rmse_y: Mapped[float] = mapped_column(Float)
+    rmse_magnitude: Mapped[float] = mapped_column(Float)
+    rmse_pixels: Mapped[float] = mapped_column(Float)
 
-    MSE_X: Mapped[float] = mapped_column(Float)
-    MSE_Y: Mapped[float] = mapped_column(Float)
+    mse_x: Mapped[float] = mapped_column(Float)
+    mse_y: Mapped[float] = mapped_column(Float)
 
-    MAE_X: Mapped[float] = mapped_column(Float)
-    MAE_Y: Mapped[float] = mapped_column(Float)
+    mae_x: Mapped[float] = mapped_column(Float)
+    mae_y: Mapped[float] = mapped_column(Float)
 
-    SHIFT_MEAN: Mapped[float] = mapped_column(Float)
-    SHIFT_MEDIAN: Mapped[float] = mapped_column(Float)
-    SHIFT_STD: Mapped[float] = mapped_column(Float)
-    SHIFT_MIN: Mapped[float] = mapped_column(Float)
-    SHIFT_MAX: Mapped[float] = mapped_column(Float)
+    shift_mean: Mapped[float] = mapped_column(Float)
+    shift_median: Mapped[float] = mapped_column(Float)
+    shift_std: Mapped[float] = mapped_column(Float)
+    shift_min: Mapped[float] = mapped_column(Float)
+    shift_max: Mapped[float] = mapped_column(Float)
 
-    ANGLE_MEAN: Mapped[float] = mapped_column(Float)
+    angle_mean: Mapped[float] = mapped_column(Float)
 
-    SSIM_MEAN: Mapped[float] = mapped_column(Float)
+    ssim_mean: Mapped[float] = mapped_column(Float)
 
-    RELIABILITY_MEAN: Mapped[float] = mapped_column(Float)
-    RELIABILITY_MEDIAN: Mapped[float] = mapped_column(Float)
+    reliability_mean: Mapped[float] = mapped_column(Float)
+    reliability_median: Mapped[float] = mapped_column(Float)
 
-    metrics: Mapped["CoregMetrics"] = relationship(
-        back_populates="overall_stat"
+    metrics_record: Mapped["CoregistrationMetrics"] = relationship(
+        back_populates="overall_statistics"
     )
 
 
 # ============================================================
-# SCHEDULER CONFIG
+# SCHEDULER CONFIGURATION
 # ============================================================
 
-class SchedulerConfig(Base):
+class SchedulerConfiguration(Base):
+    """Stores scheduler configuration for automatic processing."""
     __tablename__ = "scheduler_config"
 
     id: Mapped[int] = mapped_column(
@@ -352,23 +360,23 @@ class SchedulerConfig(Base):
     )
 
     folder_path: Mapped[str] = mapped_column(Text, nullable=False)
-    recursive: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    recursive_scan: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     sensor_hint: Mapped[str | None] = mapped_column(String(64))
     
-    interval_minutes: Mapped[int] = mapped_column(
+    scan_interval_minutes: Mapped[int] = mapped_column(
         Integer,
         default=60,
         nullable=False,
     )
     
-    min_overlap_pct: Mapped[float] = mapped_column(Float, default=10.0)
-    max_cloud_cover_pct: Mapped[float] = mapped_column(Float, default=80.0)
+    minimum_overlap_percent: Mapped[float] = mapped_column(Float, default=10.0)
+    maximum_cloud_cover_percent: Mapped[float] = mapped_column(Float, default=80.0)
     
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     
     last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=utcnow,
-        onupdate=utcnow,
+        default=utc_now,
+        onupdate=utc_now,
     )
