@@ -30,6 +30,12 @@ from api.utils import (
     resolve_input_path,
     shared_token_count,
 )
+from pathlib import Path
+
+
+def normalize_path(path: str) -> str:
+    return str(Path(path).resolve()).replace("\\", "/").lower()
+
 
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
 log = logging.getLogger("api.jobs")
@@ -327,6 +333,15 @@ async def auto_process_targets(request: AutoProcessRequest, db: Session = Depend
         request.sensor_name or "none",
         request.priority,
     )
+    
+    existing_targets = {
+    normalize_path(path)
+    for path in db.scalars(
+        select(CoregJob.target_image)
+        .where(CoregJob.status.in_(["completed", "running", "queued"]))
+    ).all()
+    if path
+   }
 
     for raw_target in request.target_paths:
         log.info("Processing requested target input=%s", raw_target)
@@ -352,6 +367,24 @@ async def auto_process_targets(request: AutoProcessRequest, db: Session = Depend
                     reason=f"Target file not found: {target_path}",
                 )
             )
+            continue
+        
+        normalized_target = normalize_path(str(target_path))
+
+        if normalized_target in existing_targets:
+            log.info(
+                "Skipping already processed target=%s",
+                target_path
+            )
+
+            results.append(
+                AutoProcessItemResult(
+                    target_path=str(target_path),
+                    status="failed",
+                    reason="Target image has already been processed."
+                )
+            )
+
             continue
 
         base_path, match_reason = _match_base_for_target(target_path, request.sensor_name)

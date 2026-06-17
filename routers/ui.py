@@ -29,7 +29,7 @@ async def ui_page() -> HTMLResponse:
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <title>Coregistration Test UI</title>
+      
       <style>
         :root {{
           --bg: #f6f3eb;
@@ -178,7 +178,7 @@ async def ui_page() -> HTMLResponse:
     <body>
       <div class="wrap">
         <div class="hero">
-          <h1>Coregistration Test UI</h1>
+         
           <p>Scan folders, select one or more target files, and let the backend automatically match the right base image and run the pipeline in order.</p>
         </div>
         <div class="grid">
@@ -565,8 +565,8 @@ async def ui_page() -> HTMLResponse:
               max_cloud_cover_pct: 80.0,
               enabled: enabled
             }};
-            const res = await fetch("/api/scheduler/config", {{
-              method: "PUT",
+            const res = await fetch("/api/scheduler/autoscan ", {{
+              method: "POST",
               headers: {{ "Content-Type": "application/json" }},
               body: JSON.stringify(payload)
             }});

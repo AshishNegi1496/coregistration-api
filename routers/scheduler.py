@@ -22,6 +22,30 @@ def _normalize_root_path(raw_path: str) -> str:
     return normalized
 
 
+@router.get("/config", status_code=status.HTTP_200_OK)
+def get_scheduler_config(
+    db: Session = Depends(get_db)
+):
+    _ensure_default_configs(db)
+
+    configs = list(
+        db.scalars(select(SchedulerConfig))
+    )
+
+    return {
+        "configs": [
+            {
+                "id": c.id,
+                "enabled": c.enabled,
+                "folder_path": c.folder_path,
+                "recursive": c.recursive,
+                "sensor_hint": c.sensor_hint,
+                "interval_minutes": c.interval_minutes,
+            }
+            for c in configs
+        ]
+    }
+
 def _ensure_default_configs(db: Session) -> None:
     if db.scalar(select(SchedulerConfig.id).limit(1)) is not None:
         configs = list(db.scalars(select(SchedulerConfig)))
@@ -50,37 +74,230 @@ def _ensure_default_configs(db: Session) -> None:
 
 
 @router.post("/periodicity", status_code=status.HTTP_200_OK)
-async def set_periodicity(request: PeriodicityRequest, db: Session = Depends(get_db)):
-    """Set the scan periodicity (interval in minutes)."""
+async def set_periodicity(
+    request: PeriodicityRequest,
+    db: Session = Depends(get_db)
+):
+    """Set scan periodicity and start countdown from now."""
+
     _ensure_default_configs(db)
+
     configs = list(db.scalars(select(SchedulerConfig)))
+
     if not configs:
-        raise HTTPException(status_code=404, detail="No scheduler config found")
-    
+        raise HTTPException(
+            status_code=404,
+            detail="No scheduler config found"
+        )
+
+    now = datetime.now(timezone.utc)
+
     for config in configs:
         config.interval_minutes = request.interval_minutes
-        config.updated_at = datetime.now(timezone.utc)
-    
+
+        # Reset timer so first scan happens AFTER interval
+        config.last_scan_at = now
+
+        config.updated_at = now
+
     db.commit()
+
     return {
         "status": "ok",
         "interval_minutes": request.interval_minutes,
-        "message": f"Periodicity set to {request.interval_minutes} minute(s)"
+        "message": (
+            f"Periodicity set to {request.interval_minutes} minute(s). "
+            f"First scan will run after the interval expires."
+        )
     }
-
 
 @router.post("/autoscan", response_model=AutoscanResponse, status_code=status.HTTP_200_OK)
 async def trigger_autoscan(db: Session = Depends(get_db)):
-    """Trigger autoscan based on saved periodicity and start coreg process for new files.
-    
-    This endpoint:
-    1. Scans the target folder for image files
-    2. Filters out target images that are already completed (status='completed' in coreg_job)
-    3. For each new target image, finds a matching base image and starts the coregistration process
-    """
+    try:
+        _ensure_default_configs(db)
+
+        configs = list(
+            db.scalars(
+                select(SchedulerConfig)
+                .where(SchedulerConfig.enabled == True)
+            )
+        )
+
+        if not configs:
+            return AutoscanResponse(
+                status="ok",
+                scanned_folders=[],
+                new_files_found=[],
+                jobs_started=[],
+                message="No enabled scheduler configs found"
+            )
+
+        now = datetime.now(timezone.utc)
+
+        def normalize_path(path: str) -> str:
+            return str(Path(path).resolve()).replace("\\", "/").lower()
+
+        # Get all previously processed targets
+        db_targets = db.scalars(
+            select(CoregJob.target_image)
+        ).all()
+
+        existing_targets = {
+            normalize_path(path)
+            for path in db_targets
+            if path is not None and str(path).strip()
+        }
+
+        print(f"Found {len(existing_targets)} existing targets in DB")
+
+        discovered: list[str] = []
+        new_files: list[str] = []
+        jobs_started: list[int] = []
+        scanned_folders: list[str] = []
+
+        for config in configs:
+
+            if config.sensor_hint != "target":
+                continue
+
+            # -----------------------------------------
+            # Wait for configured interval
+            # -----------------------------------------
+            if config.last_scan_at is not None:
+                elapsed_seconds = (
+                    now - config.last_scan_at
+                ).total_seconds()
+
+                required_seconds = (
+                    config.interval_minutes * 60
+                )
+
+                if elapsed_seconds < required_seconds:
+                    remaining = required_seconds - elapsed_seconds
+
+                    print(
+                        f"Skipping scan. "
+                        f"{remaining:.0f}s remaining before next scan."
+                    )
+                    continue
+
+            # -----------------------------------------
+            # Validate folder
+            # -----------------------------------------
+            folder = Path(config.folder_path)
+
+            if not folder.exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Folder does not exist: {config.folder_path}"
+                )
+
+            scanned_folders.append(config.folder_path)
+
+            all_images = list(
+                list_image_files(
+                    folder,
+                    recursive=config.recursive
+                )
+            )
+
+            discovered.extend(
+                str(path)
+                for path in all_images
+            )
+
+            print(f"Discovered {len(all_images)} image(s)")
+
+            # -----------------------------------------
+            # Process only new files
+            # -----------------------------------------
+            for img_path in all_images:
+
+                img_str = str(img_path)
+
+                normalized_img = normalize_path(img_str)
+
+                if normalized_img in existing_targets:
+                    print(
+                        f"Skipping already processed file: "
+                        f"{img_str}"
+                    )
+                    continue
+
+                new_files.append(img_str)
+
+                base_path, match_reason = _match_base_for_target(
+                    img_path,
+                    config.sensor_hint
+                )
+
+                if base_path is None:
+                    print(
+                        f"No matching base found for: "
+                        f"{img_str}"
+                    )
+                    continue
+
+                job = _create_job(
+                    db,
+                    target_path=img_path,
+                    base_path=base_path,
+                    sensor_name=config.sensor_hint or "unknown",
+                )
+
+                db.commit()
+
+                existing_targets.add(normalized_img)
+
+                print(
+                    f"Starting job {job.job_no} "
+                    f"for {img_str}"
+                )
+
+                _process_job(
+                    job,
+                    img_path,
+                    base_path,
+                    db
+                )
+
+                db.refresh(job)
+
+                jobs_started.append(job.job_no)
+
+            # -----------------------------------------
+            # Update scan timestamps
+            # -----------------------------------------
+            config.last_scan_at = now
+            config.updated_at = now
+
+        db.commit()
+
+        return AutoscanResponse(
+            status="ok",
+            scanned_folders=scanned_folders,
+            new_files_found=new_files,
+            jobs_started=jobs_started,
+            message=(
+                f"Found {len(new_files)} new file(s), "
+                f"started {len(jobs_started)} job(s)"
+            )
+        )
+
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise
+
     _ensure_default_configs(db)
-    configs = list(db.scalars(select(SchedulerConfig).where(SchedulerConfig.enabled == True)))
-    
+
+    configs = list(
+        db.scalars(
+            select(SchedulerConfig)
+            .where(SchedulerConfig.enabled == True)
+        )
+    )
+
     if not configs:
         return AutoscanResponse(
             status="ok",
@@ -89,64 +306,120 @@ async def trigger_autoscan(db: Session = Depends(get_db)):
             jobs_started=[],
             message="No enabled scheduler configs found"
         )
-    
-    # Get all completed target images to exclude them
-    completed_targets = set(
-        db.scalars(
-            select(CoregJob.target_image).where(CoregJob.status == "completed")
+
+    now = datetime.now(timezone.utc)
+
+    # Skip files already seen in ANY job
+    existing_targets = {
+        normalize_path(path)
+        for path in db.scalars(
+            select(CoregJob.target_image)
         ).all()
-    )
-    
+        if path
+    }
+
     discovered: list[str] = []
     new_files: list[str] = []
     jobs_started: list[int] = []
-    now = datetime.now(timezone.utc)
-    
+
+    scanned_folders: list[str] = []
+
     for config in configs:
+
         if config.sensor_hint != "target":
             continue
-            
+
+        # ----------------------------------------
+        # WAIT FOR CONFIGURED INTERVAL
+        # ----------------------------------------
+        if config.last_scan_at is not None:
+
+            elapsed_seconds = (
+                now - config.last_scan_at
+            ).total_seconds()
+
+            required_seconds = (
+                config.interval_minutes * 60
+            )
+
+            if elapsed_seconds < required_seconds:
+                continue
+
+        # ----------------------------------------
+
         folder = Path(config.folder_path)
+
         if not folder.exists():
-            raise HTTPException(status_code=400, detail=f"Folder does not exist: {config.folder_path}")
-        
-        all_images = list(list_image_files(folder, recursive=config.recursive))
-        discovered.extend(str(path) for path in all_images)
-        
-        # Filter out already completed targets
+            raise HTTPException(
+                status_code=400,
+                detail=f"Folder does not exist: {config.folder_path}"
+            )
+
+        scanned_folders.append(config.folder_path)
+
+        all_images = list(
+            list_image_files(
+                folder,
+                recursive=config.recursive
+            )
+        )
+
+        discovered.extend(
+            str(path)
+            for path in all_images
+        )
+
         for img_path in all_images:
-            img_str = str(img_path)
-            if img_str not in completed_targets:
-                new_files.append(img_str)
-                
-                # Find matching base and start coregistration
-                base_path, match_reason = _match_base_for_target(img_path, config.sensor_hint)
-                if base_path is None:
-                    continue
-                
-                # Create and process job
-                job = _create_job(
-                    db,
-                    target_path=img_path,
-                    base_path=base_path,
-                    sensor_name=config.sensor_hint or "unknown",
-                )
-                db.commit()
-                
-                # Start the coregistration process
-                _process_job(job, img_path, base_path, db)
-                
-                db.refresh(job)
-                jobs_started.append(job.job_no)
-        
+
+            normalized_img = normalize_path(
+                str(img_path)
+            )
+
+            # Skip anything already processed
+            if normalized_img in existing_targets:
+                continue
+
+            new_files.append(str(img_path))
+
+            base_path, match_reason = _match_base_for_target(
+                img_path,
+                config.sensor_hint
+            )
+
+            if base_path is None:
+                continue
+
+            job = _create_job(
+                db,
+                target_path=img_path,
+                base_path=base_path,
+                sensor_name=config.sensor_hint or "unknown",
+            )
+
+            db.commit()
+
+            # Prevent duplicates during same scan
+            existing_targets.add(normalized_img)
+
+            _process_job(
+                job,
+                img_path,
+                base_path,
+                db
+            )
+
+            db.refresh(job)
+
+            jobs_started.append(job.job_no)
+
         config.last_scan_at = now
         config.updated_at = now
-    
+
     db.commit()
-    
+
     return AutoscanResponse(
         status="ok",
-        scanned_folders=[config.folder_path for config in configs if config.sensor_hint == "target"],
+        scanned_folders=scanned_folders,
         new_files_found=new_files,
         jobs_started=jobs_started,
         message=f"Found {len(new_files)} new file(s), started {len(jobs_started)} job(s)"
