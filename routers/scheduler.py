@@ -9,9 +9,10 @@ from sqlalchemy.orm import Session
 
 from api.db import get_db
 from api.config import settings
-from api.models import SchedulerConfig
-from api.schemas.scheduler import SchedulerConfigRequest, SchedulerConfigResponse, SchedulerStatusResponse
+from api.models import SchedulerConfig, CoregJob
+from api.schemas.scheduler import PeriodicityRequest, AutoscanResponse
 from api.utils import list_image_files
+from api.routers.jobs import _match_base_for_target, _create_job, _process_job
 
 router = APIRouter(prefix="/scheduler", tags=["Scheduler"])
 
@@ -48,69 +49,105 @@ def _ensure_default_configs(db: Session) -> None:
     db.commit()
 
 
-@router.get("/config", response_model=SchedulerStatusResponse)
-async def get_scheduler_configuration(db: Session = Depends(get_db)):
-    _ensure_default_configs(db)
-    configs = list(db.scalars(select(SchedulerConfig).order_by(SchedulerConfig.id.asc())))
-    return SchedulerStatusResponse(
-        enabled=any(config.enabled for config in configs) if configs else True,
-        last_scan_at=max((config.last_scan_at for config in configs if config.last_scan_at), default=None),
-        configs=[SchedulerConfigResponse.model_validate(config) for config in configs],
-    )
-
-
-@router.put("/config", response_model=SchedulerStatusResponse)
-async def update_scheduler_configuration(request: SchedulerConfigRequest, db: Session = Depends(get_db)):
-    db.execute(delete(SchedulerConfig))
-    for folder in request.folders:
-        db.add(
-            SchedulerConfig(
-                folder_path=folder.path,
-                recursive=folder.recursive,
-                sensor_hint=folder.sensor_hint,
-                interval_minutes=request.interval_minutes,
-                min_overlap_pct=request.min_overlap_pct,
-                max_cloud_cover_pct=request.max_cloud_cover_pct,
-                enabled=request.enabled,
-                last_scan_at=None,
-                updated_at=datetime.now(timezone.utc),
-            )
-        )
-    db.commit()
-    return await get_scheduler_configuration(db)
-
-
-@router.post("/scan", status_code=status.HTTP_200_OK)
-async def trigger_manual_folders_scan(db: Session = Depends(get_db)):
+@router.post("/periodicity", status_code=status.HTTP_200_OK)
+async def set_periodicity(request: PeriodicityRequest, db: Session = Depends(get_db)):
+    """Set the scan periodicity (interval in minutes)."""
     _ensure_default_configs(db)
     configs = list(db.scalars(select(SchedulerConfig)))
     if not configs:
-        return {"status": "ok", "scanned_folders": [], "discovered_files": []}
-
-    discovered: list[str] = []
-    now = datetime.now(timezone.utc)
+        raise HTTPException(status_code=404, detail="No scheduler config found")
+    
     for config in configs:
-        folder = Path(config.folder_path)
-        if not folder.exists():
-            raise HTTPException(status_code=400, detail=f"Folder does not exist: {config.folder_path}")
-        discovered.extend(str(path) for path in list_image_files(folder, recursive=config.recursive))
-        config.last_scan_at = now
-        config.updated_at = now
-
+        config.interval_minutes = request.interval_minutes
+        config.updated_at = datetime.now(timezone.utc)
+    
     db.commit()
     return {
         "status": "ok",
-        "scanned_folders": [config.folder_path for config in configs],
-        "discovered_files": discovered,
+        "interval_minutes": request.interval_minutes,
+        "message": f"Periodicity set to {request.interval_minutes} minute(s)"
     }
 
 
-@router.post("/toggle", response_model=SchedulerStatusResponse)
-async def toggle_scheduler(active: bool, db: Session = Depends(get_db)):
+@router.post("/autoscan", response_model=AutoscanResponse, status_code=status.HTTP_200_OK)
+async def trigger_autoscan(db: Session = Depends(get_db)):
+    """Trigger autoscan based on saved periodicity and start coreg process for new files.
+    
+    This endpoint:
+    1. Scans the target folder for image files
+    2. Filters out target images that are already completed (status='completed' in coreg_job)
+    3. For each new target image, finds a matching base image and starts the coregistration process
+    """
     _ensure_default_configs(db)
-    configs = list(db.scalars(select(SchedulerConfig)))
+    configs = list(db.scalars(select(SchedulerConfig).where(SchedulerConfig.enabled == True)))
+    
+    if not configs:
+        return AutoscanResponse(
+            status="ok",
+            scanned_folders=[],
+            new_files_found=[],
+            jobs_started=[],
+            message="No enabled scheduler configs found"
+        )
+    
+    # Get all completed target images to exclude them
+    completed_targets = set(
+        db.scalars(
+            select(CoregJob.target_image).where(CoregJob.status == "completed")
+        ).all()
+    )
+    
+    discovered: list[str] = []
+    new_files: list[str] = []
+    jobs_started: list[int] = []
+    now = datetime.now(timezone.utc)
+    
     for config in configs:
-        config.enabled = active
-        config.updated_at = datetime.now(timezone.utc)
+        if config.sensor_hint != "target":
+            continue
+            
+        folder = Path(config.folder_path)
+        if not folder.exists():
+            raise HTTPException(status_code=400, detail=f"Folder does not exist: {config.folder_path}")
+        
+        all_images = list(list_image_files(folder, recursive=config.recursive))
+        discovered.extend(str(path) for path in all_images)
+        
+        # Filter out already completed targets
+        for img_path in all_images:
+            img_str = str(img_path)
+            if img_str not in completed_targets:
+                new_files.append(img_str)
+                
+                # Find matching base and start coregistration
+                base_path, match_reason = _match_base_for_target(img_path, config.sensor_hint)
+                if base_path is None:
+                    continue
+                
+                # Create and process job
+                job = _create_job(
+                    db,
+                    target_path=img_path,
+                    base_path=base_path,
+                    sensor_name=config.sensor_hint or "unknown",
+                )
+                db.commit()
+                
+                # Start the coregistration process
+                _process_job(job, img_path, base_path, db)
+                
+                db.refresh(job)
+                jobs_started.append(job.job_no)
+        
+        config.last_scan_at = now
+        config.updated_at = now
+    
     db.commit()
-    return await get_scheduler_configuration(db)
+    
+    return AutoscanResponse(
+        status="ok",
+        scanned_folders=[config.folder_path for config in configs if config.sensor_hint == "target"],
+        new_files_found=new_files,
+        jobs_started=jobs_started,
+        message=f"Found {len(new_files)} new file(s), started {len(jobs_started)} job(s)"
+    )
