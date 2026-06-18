@@ -30,7 +30,7 @@ def get_scheduler_config(
     _ensure_default_configs(db)
 
     configs = list(
-        db.scalars(select(SchedulerConfig))
+        db.scalars(select(SchedulerConfiguration))
     )
 
     return {
@@ -134,16 +134,22 @@ async def set_periodicity(
             f"First scan will run after the interval expires."
         )
     }
-
-@router.post("/autoscan", response_model=AutoscanResponse, status_code=status.HTTP_200_OK)
-async def trigger_autoscan(db: Session = Depends(get_db)):
+@router.post(
+    "/autoscan",
+    response_model=AutoscanResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def trigger_autoscan(
+    db: Session = Depends(get_db),
+):
     try:
         _ensure_default_configs(db)
 
         configs = list(
             db.scalars(
-                select(SchedulerConfiguration)
-                .where(SchedulerConfiguration.enabled == True)
+                select(SchedulerConfiguration).where(
+                    SchedulerConfiguration.enabled.is_(True)
+                )
             )
         )
 
@@ -153,7 +159,7 @@ async def trigger_autoscan(db: Session = Depends(get_db)):
                 scanned_folders=[],
                 new_files_found=[],
                 jobs_started=[],
-                message="No enabled scheduler configs found"
+                message="No enabled scheduler configs found",
             )
 
         now = datetime.now(timezone.utc)
@@ -161,7 +167,9 @@ async def trigger_autoscan(db: Session = Depends(get_db)):
         def normalize_path(path: str) -> str:
             return str(Path(path).resolve()).replace("\\", "/").lower()
 
-        # Get all previously processed targets
+        # --------------------------------------------------
+        # Existing processed targets
+        # --------------------------------------------------
         db_targets = db.scalars(
             select(CoregistrationJob.target_image)
         ).all()
@@ -169,150 +177,203 @@ async def trigger_autoscan(db: Session = Depends(get_db)):
         existing_targets = {
             normalize_path(path)
             for path in db_targets
-            if path is not None and str(path).strip()
+            if path and str(path).strip()
         }
 
-        print(f"Found {len(existing_targets)} existing targets in DB")
+        print(
+            f"Found {len(existing_targets)} existing targets in DB"
+        )
 
+        scanned_folders: list[str] = []
         discovered: list[str] = []
         new_files: list[str] = []
         jobs_started: list[int] = []
-        scanned_folders: list[str] = []
 
+        # ==================================================
+        # Scheduler configs
+        # ==================================================
         for config in configs:
 
-            if config.sensor_hint != "target":
-                continue
+            # ----------------------------------------------
+            # Respect interval
+            # ----------------------------------------------
+            if config.last_scan_at:
 
-            # -----------------------------------------
-            # Wait for configured interval
-            # -----------------------------------------
-            if config.last_scan_at is not None:
                 elapsed_seconds = (
                     now - config.last_scan_at
                 ).total_seconds()
 
                 required_seconds = (
-                    config.interval_minutes * 60
+                    config.scan_interval_minutes * 60
                 )
 
                 if elapsed_seconds < required_seconds:
-                    remaining = required_seconds - elapsed_seconds
+
+                    remaining = (
+                        required_seconds - elapsed_seconds
+                    )
 
                     print(
-                        f"Skipping scan. "
-                        f"{remaining:.0f}s remaining before next scan."
+                        f"Skipping scheduler "
+                        f"{config.id}. "
+                        f"{remaining:.0f}s remaining."
                     )
+
                     continue
 
-            # -----------------------------------------
-            # Validate folder
-            # -----------------------------------------
-            folder = Path(config.folder_path)
+            root_folder = Path(config.folder_path)
 
-            if not folder.exists():
+            if not root_folder.exists():
+
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Folder does not exist: {config.folder_path}"
+                    detail=(
+                        f"Folder does not exist: "
+                        f"{config.folder_path}"
+                    ),
                 )
 
-            scanned_folders.append(config.folder_path)
+            if not root_folder.is_dir():
 
-            # =====================================================
-            # FOLDER INVENTORY CHANGE DETECTION GATE
-            # =====================================================
-            # Before expensive processing, check if folder has changed.
-            # This is a lightweight gate that prevents unnecessary work.
-            # Existing job creation logic remains unchanged.
-            
-            should_process, inventory = has_folder_changed(db, folder)
-            
-            if not should_process:
-                print(
-                    f"Skipping folder '{folder.name}': no changes detected "
-                    f"(size={inventory.folder_size_bytes if inventory else 0}, "
-                    f"modified={inventory.modified_time if inventory else 'N/A'})"
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Path is not a directory: "
+                        f"{config.folder_path}"
+                    ),
                 )
-                # Still update scheduler config timestamp but skip file scanning
-                config.last_scan_at = now
-                config.updated_at = now
-                continue
-            
-            print(f"Folder '{folder.name}' changed or new - processing...")
-            # =====================================================
 
-            all_images = list(
-                list_image_files(
-                    folder,
-                    recursive=config.recursive
-                )
+            # ----------------------------------------------
+            # Auto-create inventory rows
+            # ----------------------------------------------
+            sync_all_folders(
+                db=db,
+                root_path=root_folder,
             )
 
-            discovered.extend(
-                str(path)
-                for path in all_images
-            )
+            # ----------------------------------------------
+            # Iterate child folders
+            # ----------------------------------------------
+            for folder in sorted(root_folder.iterdir()):
 
-            print(f"Discovered {len(all_images)} image(s)")
-
-            # -----------------------------------------
-            # Process only new files
-            # -----------------------------------------
-            for img_path in all_images:
-
-                img_str = str(img_path)
-
-                normalized_img = normalize_path(img_str)
-
-                if normalized_img in existing_targets:
-                    print(
-                        f"Skipping already processed file: "
-                        f"{img_str}"
-                    )
+                if not folder.is_dir():
                     continue
 
-                new_files.append(img_str)
+                scanned_folders.append(str(folder))
 
-                base_path, match_reason = _match_base_for_target(
-                    img_path,
-                    config.sensor_hint
-                )
-
-                if base_path is None:
-                    print(
-                        f"No matching base found for: "
-                        f"{img_str}"
+                should_process, inventory = (
+                    has_folder_changed(
+                        db=db,
+                        folder_path=folder,
                     )
-                    continue
-
-                job = _create_job(
-                    db,
-                    target_path=img_path,
-                    base_path=base_path,
-                    sensor_name=config.sensor_hint or "unknown",
                 )
 
-                db.commit()
+                if not should_process:
 
-                existing_targets.add(normalized_img)
+                    print(
+                        f"[SKIP] {folder.name} "
+                        f"(no changes detected)"
+                    )
+
+                    continue
 
                 print(
-                    f"Starting job {job.job_no} "
-                    f"for {img_str}"
+                    f"[PROCESS] {folder.name} "
+                    f"(folder changed)"
                 )
 
-                _process_job(
-                    job,
-                    img_path,
-                    base_path,
-                    db
+                # ------------------------------------------
+                # Discover TIFF files
+                # ------------------------------------------
+                all_images = list(
+                    list_image_files(
+                        folder,
+                        recursive=True,
+                    )
                 )
 
-                db.refresh(job)
+                discovered.extend(
+                    str(img)
+                    for img in all_images
+                )
 
-                jobs_started.append(job.job_no)
+                print(
+                    f"{folder.name}: "
+                    f"{len(all_images)} image(s) found"
+                )
 
-            # Update scan timestamps (already updated in has_folder_changed)
+                # ------------------------------------------
+                # Existing processing logic
+                # ------------------------------------------
+                for img_path in all_images:
+
+                    img_str = str(img_path)
+
+                    normalized_img = normalize_path(
+                        img_str
+                    )
+
+                    if (
+                        normalized_img
+                        in existing_targets
+                    ):
+                        continue
+
+                    new_files.append(img_str)
+
+                    satellite_name = (
+                        folder.name.split("_")[0]
+                        if "_" in folder.name
+                        else folder.name
+                    )
+
+                    base_path, match_reason = (
+                        _match_base_for_target(
+                            img_path,
+                            satellite_name,
+                        )
+                    )
+
+                    if base_path is None:
+
+                        print(
+                            f"No matching base found "
+                            f"for {img_str}"
+                        )
+
+                        continue
+
+                    job = _create_job(
+                        db=db,
+                        target_path=img_path,
+                        base_path=base_path,
+                        sensor_name=satellite_name,
+                    )
+
+                    db.commit()
+
+                    existing_targets.add(
+                        normalized_img
+                    )
+
+                    print(
+                        f"Starting job "
+                        f"{job.job_no}"
+                    )
+
+                    _process_job(
+                        job,
+                        img_path,
+                        base_path,
+                        db,
+                    )
+
+                    db.refresh(job)
+
+                    jobs_started.append(
+                        job.job_no
+                    )
+
             config.last_scan_at = now
             config.updated_at = now
 
@@ -326,10 +387,11 @@ async def trigger_autoscan(db: Session = Depends(get_db)):
             message=(
                 f"Found {len(new_files)} new file(s), "
                 f"started {len(jobs_started)} job(s)"
-            )
+            ),
         )
 
     except Exception:
         import traceback
+
         traceback.print_exc()
         raise

@@ -32,7 +32,7 @@ def utc_now() -> datetime:
 class FolderInventory(Base):
     """Tracks folder-level metadata for change detection.
     
-    This model provides lightweight change detection by monitoring
+    This model provides change detection by monitoring
     folder size and modification time. The scheduler uses this to
     avoid reprocessing folders that haven't changed.
     """
