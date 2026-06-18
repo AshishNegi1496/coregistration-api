@@ -1,11 +1,26 @@
-from api.db import Base, engine
-from api import models  # noqa: F401
+"""
+Database initialization with simplified schema.
+
+Removed tables:
+- FolderScanResult (file-level results)
+- Sensor-hint based folder filtering
+
+Remaining tables:
+- CoregJob: Source of truth for processed files (via target_image index)
+- FolderInventory: Folder-level change detection only
+- SchedulerConfig: Scheduler configuration
+- CoregMetrics, CoregParameter, CoregPixelSize, CoregSystemPerformance, CoregOverallStat
+"""
+
+from api.db import engine
+from api.models import Base
 
 
-def main() -> None:
+def init_db():
+    """Initialize database with all tables."""
     Base.metadata.create_all(bind=engine)
-    print("Database schema created or already present.")
+    print("Database initialized successfully")
 
 
 if __name__ == "__main__":
-    main()
+    init_db()
