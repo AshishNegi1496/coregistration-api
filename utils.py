@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from sqlalchemy.orm import Session
 
 
 IMAGE_EXTENSIONS = {".tif", ".tiff", ".jp2"}
@@ -371,3 +372,37 @@ def best_candidate(paths: list[Path]) -> Path | None:
         return (score if score is not None else float("inf"), size_rank, path.name.lower())
 
     return sorted(paths, key=sort_key)[0]
+
+
+# ============================================================
+# DUPLICATE DETECTION HELPER
+# ============================================================
+
+def is_file_already_processed(
+    db: Session,
+    file_path: Path,
+) -> bool:
+    """
+    Check if a file has already been processed as a target image.
+    
+    Used by both auto-scan and manual upload flows to prevent duplicate
+    coregistration jobs.
+    
+    Args:
+        db: SQLAlchemy session
+        file_path: Path to the TIFF file (will be normalized)
+    
+    Returns:
+        True if CoregJob with matching target_image exists, False otherwise
+    """
+    from api.models import CoregJob
+    
+    # Normalize path for comparison
+    normalized_path = str(file_path.resolve())
+    
+    # Query for any job with this target_image
+    existing_job = db.query(CoregJob).filter(
+        CoregJob.target_image == normalized_path
+    ).first()
+    
+    return existing_job is not None
