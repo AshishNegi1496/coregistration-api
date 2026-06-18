@@ -71,6 +71,7 @@ class CoregJob(Base):
     target_image: Mapped[str] = mapped_column(
         Text,
         nullable=False,
+        index=True,  # Index for duplicate detection lookup
     )
 
     coreg_output_path: Mapped[str | None] = mapped_column(Text)
@@ -340,10 +341,20 @@ class CoregOverallStat(Base):
 
 
 # ============================================================
-# SCHEDULER CONFIG - Root Level
+# SCHEDULER CONFIGURATION - Simplified
 # ============================================================
 
 class SchedulerConfig(Base):
+    """
+    Points to the root TARGET directory.
+    Stores only configuration for auto-scan scheduler.
+    
+    Example:
+    - folder_path: "/mnt/TARGET"
+    - scan_interval_minutes: 60
+    - enabled: true
+    - last_scan_at: 2026-06-18T10:30:00Z
+    """
     __tablename__ = "scheduler_config"
 
     id: Mapped[int] = mapped_column(
@@ -352,22 +363,18 @@ class SchedulerConfig(Base):
         autoincrement=True,
     )
 
-    folder_path: Mapped[str] = mapped_column(Text, nullable=False)
-    recursive: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    sensor_hint: Mapped[str | None] = mapped_column(String(64))
+    folder_path: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     
-    interval_minutes: Mapped[int] = mapped_column(
+    scan_interval_minutes: Mapped[int] = mapped_column(
         Integer,
         default=60,
         nullable=False,
     )
     
-    min_overlap_pct: Mapped[float] = mapped_column(Float, default=10.0)
-    max_cloud_cover_pct: Mapped[float] = mapped_column(Float, default=80.0)
-    
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     
     last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utcnow,
@@ -382,15 +389,23 @@ class SchedulerConfig(Base):
 
 
 # ============================================================
-# FOLDER INVENTORY - Subdirectory Change Tracking
+# FOLDER INVENTORY - Subdirectory Change Tracking (Optimization Layer)
 # ============================================================
 
 class FolderInventory(Base):
     """
-    Tracks metadata of subdirectories (like C2A_PAK, C2A_CHN, etc.)
-    to detect changes and only scan when needed.
+    Tracks folder-level metadata only.
+    Used to detect whether a folder has changed (size or modified_time).
     
-    Example: TARGET/C2A_PAK -> folder_path, size, modified_time, last_scan_at
+    Only scan a folder if:
+    - folder_size_bytes changed OR
+    - modified_time changed OR
+    - inventory record doesn't exist
+    
+    Example: TARGET/C2A_PAK -> folder_name, size, modified_time, last_scanned_at
+    
+    Does NOT store file-level results. Files are checked against CoregJob.target_image
+    for duplicate detection.
     """
     __tablename__ = "folder_inventory"
 
@@ -407,9 +422,6 @@ class FolderInventory(Base):
         index=True,
     )
 
-    # Full path to the subdirectory: e.g., "TARGET/C2A_PAK"
-    folder_path: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-
     # Folder name only: e.g., "C2A_PAK"
     folder_name: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
 
@@ -418,9 +430,6 @@ class FolderInventory(Base):
 
     # Last modified time of any file inside
     modified_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    # Whether this folder should be scanned
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # When this inventory record was last scanned for changes
     last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -441,61 +450,4 @@ class FolderInventory(Base):
     # Relationship back to scheduler
     scheduler_config: Mapped["SchedulerConfig"] = relationship(
         back_populates="folder_inventories"
-    )
-
-    # Relationship to scan results
-    scan_results: Mapped[list["FolderScanResult"]] = relationship(
-        back_populates="folder_inventory",
-        cascade="all, delete-orphan",
-    )
-
-
-# ============================================================
-# FOLDER SCAN RESULTS - Images Found in Subdirectories
-# ============================================================
-
-class FolderScanResult(Base):
-    """
-    Stores the results of scanning a subdirectory.
-    Example: C2A_PAK contains [image1.tif, image2.jp2]
-    """
-    __tablename__ = "folder_scan_result"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    folder_inventory_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("folder_inventory.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-
-    # Full path to the image file
-    file_path: Mapped[str] = mapped_column(Text, nullable=False)
-
-    # File name only
-    file_name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
-
-    # File extension: .tif, .tiff, .jp2
-    file_extension: Mapped[str] = mapped_column(String(10))
-
-    # File size in bytes
-    file_size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
-
-    # Last modified time
-    modified_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    # When this scan result was recorded
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utcnow,
-    )
-
-    # Relationship back to folder inventory
-    folder_inventory: Mapped["FolderInventory"] = relationship(
-        back_populates="scan_results"
     )
