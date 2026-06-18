@@ -17,6 +17,33 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+def calculate_folder_size(folder: Path) -> int:
+    """Calculate total size of all files in a folder recursively.
+    
+    Uses pathlib for filesystem operations and gracefully ignores
+    inaccessible files.
+    
+    Args:
+        folder: Path to the folder to calculate size for.
+        
+    Returns:
+        Total size in bytes of all accessible files in the folder.
+    """
+    total_size = 0
+    try:
+        for path in folder.rglob("*"):
+            try:
+                if path.is_file():
+                    total_size += path.stat().st_size
+            except (OSError, PermissionError):
+                # Ignore inaccessible files gracefully
+                continue
+    except (OSError, PermissionError):
+        # If folder itself is inaccessible, return 0
+        return 0
+    return total_size
+
+
 def resolve_input_path(root: Path, value: str) -> Path:
     candidate = Path(value).expanduser()
     if not candidate.is_absolute():

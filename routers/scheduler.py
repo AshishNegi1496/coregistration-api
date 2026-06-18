@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session
 
 from api.db import get_db
 from api.config import settings
-from api.models import SchedulerConfiguration, CoregistrationJob
+from api.models import SchedulerConfiguration, CoregistrationJob, FolderInventory
 from api.schemas.scheduler import PeriodicityRequest, AutoscanResponse
-from api.utils import list_image_files
+from api.utils import list_image_files, calculate_folder_size
 from api.routers.jobs import _match_base_for_target, _create_job, _process_job
+from api.folder_inventory_service import has_folder_changed, sync_all_folders
 
 router = APIRouter(prefix="/scheduler", tags=["Scheduler"])
 
@@ -47,6 +48,11 @@ def get_scheduler_config(
     }
 
 def _ensure_default_configs(db: Session) -> None:
+    """Ensure default scheduler configurations exist.
+    
+    Also performs startup sync of folder inventory for all configured
+    target folders to auto-create inventory records.
+    """
     if db.scalar(select(SchedulerConfiguration.id).limit(1)) is not None:
         configs = list(db.scalars(select(SchedulerConfiguration)))
         changed = False
@@ -71,6 +77,24 @@ def _ensure_default_configs(db: Session) -> None:
         ]
     )
     db.commit()
+    
+    # Startup sync: create inventory records for all existing folders
+    _sync_folder_inventory_at_startup(db)
+
+
+def _sync_folder_inventory_at_startup(db: Session) -> None:
+    """Sync folder inventory for all configured root paths at startup.
+    
+    Auto-creates FolderInventory records for folders that don't exist
+    in DB yet. This ensures no manual initialization is required.
+    """
+    configs = list(db.scalars(select(SchedulerConfiguration)))
+    for config in configs:
+        root_path = Path(config.folder_path)
+        if root_path.exists():
+            # Sync all subfolders under this root
+            sync_all_folders(db, root_path)
+            db.commit()
 
 
 @router.post("/periodicity", status_code=status.HTTP_200_OK)
@@ -194,6 +218,29 @@ async def trigger_autoscan(db: Session = Depends(get_db)):
 
             scanned_folders.append(config.folder_path)
 
+            # =====================================================
+            # FOLDER INVENTORY CHANGE DETECTION GATE
+            # =====================================================
+            # Before expensive processing, check if folder has changed.
+            # This is a lightweight gate that prevents unnecessary work.
+            # Existing job creation logic remains unchanged.
+            
+            should_process, inventory = has_folder_changed(db, folder)
+            
+            if not should_process:
+                print(
+                    f"Skipping folder '{folder.name}': no changes detected "
+                    f"(size={inventory.folder_size_bytes if inventory else 0}, "
+                    f"modified={inventory.modified_time if inventory else 'N/A'})"
+                )
+                # Still update scheduler config timestamp but skip file scanning
+                config.last_scan_at = now
+                config.updated_at = now
+                continue
+            
+            print(f"Folder '{folder.name}' changed or new - processing...")
+            # =====================================================
+
             all_images = list(
                 list_image_files(
                     folder,
@@ -265,9 +312,7 @@ async def trigger_autoscan(db: Session = Depends(get_db)):
 
                 jobs_started.append(job.job_no)
 
-            # -----------------------------------------
-            # Update scan timestamps
-            # -----------------------------------------
+            # Update scan timestamps (already updated in has_folder_changed)
             config.last_scan_at = now
             config.updated_at = now
 
