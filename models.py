@@ -389,7 +389,7 @@ class OverallStatistics(Base):
 
 
 # ============================================================
-# SCHEDULER CONFIGURATION
+# SCHEDULER CONFIG - Root Level
 # ============================================================
 
 class SchedulerConfiguration(Base):
@@ -420,6 +420,132 @@ class SchedulerConfiguration(Base):
     last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=utc_now,
-        onupdate=utc_now,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    # Relationship to folder inventory
+    folder_inventories: Mapped[list["FolderInventory"]] = relationship(
+        back_populates="scheduler_config",
+        cascade="all, delete-orphan",
+    )
+
+
+# ============================================================
+# FOLDER INVENTORY - Subdirectory Change Tracking
+# ============================================================
+
+class FolderInventory(Base):
+    """
+    Tracks metadata of subdirectories (like C2A_PAK, C2A_CHN, etc.)
+    to detect changes and only scan when needed.
+    
+    Example: TARGET/C2A_PAK -> folder_path, size, modified_time, last_scan_at
+    """
+    __tablename__ = "folder_inventory"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    scheduler_config_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("scheduler_config.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Full path to the subdirectory: e.g., "TARGET/C2A_PAK"
+    folder_path: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+
+    # Folder name only: e.g., "C2A_PAK"
+    folder_name: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+
+    # Total size in bytes of the folder
+    folder_size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+
+    # Last modified time of any file inside
+    modified_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Whether this folder should be scanned
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # When this inventory record was last scanned for changes
+    last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # When this inventory record was created
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+    )
+
+    # When this inventory record was last updated
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    # Relationship back to scheduler
+    scheduler_config: Mapped["SchedulerConfig"] = relationship(
+        back_populates="folder_inventories"
+    )
+
+    # Relationship to scan results
+    scan_results: Mapped[list["FolderScanResult"]] = relationship(
+        back_populates="folder_inventory",
+        cascade="all, delete-orphan",
+    )
+
+
+# ============================================================
+# FOLDER SCAN RESULTS - Images Found in Subdirectories
+# ============================================================
+
+class FolderScanResult(Base):
+    """
+    Stores the results of scanning a subdirectory.
+    Example: C2A_PAK contains [image1.tif, image2.jp2]
+    """
+    __tablename__ = "folder_scan_result"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    folder_inventory_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("folder_inventory.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Full path to the image file
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # File name only
+    file_name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+
+    # File extension: .tif, .tiff, .jp2
+    file_extension: Mapped[str] = mapped_column(String(10))
+
+    # File size in bytes
+    file_size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+
+    # Last modified time
+    modified_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # When this scan result was recorded
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+    )
+
+    # Relationship back to folder inventory
+    folder_inventory: Mapped["FolderInventory"] = relationship(
+        back_populates="scan_results"
     )
