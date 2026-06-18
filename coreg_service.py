@@ -62,7 +62,31 @@ def _get_image_info(path: Path) -> dict:
     }
 
 
-def _choose_coreg_params(ref: Path, tgt: Path) -> dict:
+def _choose_coreg_params(ref: Path, tgt: Path, custom_params: dict | None = None) -> dict:
+    """Choose coregistration parameters, using custom params if provided.
+    
+    In manual mode, all parameters come directly from custom_params.
+    In auto mode, parameters are selected adaptively based on GSD ratio.
+    """
+    if custom_params:
+        # Manual mode: use all values directly from custom_params
+        return {
+            "grid_res": int(custom_params.get("grid_res", 2048)),
+            "window_size": (
+                int(custom_params.get("window_size_x", 256)),
+                int(custom_params.get("window_size_y", 256))
+            ),
+            "max_shift": float(custom_params.get("max_shift", 100)),
+            "min_reliability": float(custom_params.get("min_reliability", 40)),
+            "tieP_filter_level": int(custom_params.get("tieP_filter_level", 3)),
+            "rs_max_outlier": int(custom_params.get("rs_max_outlier", 10)),
+            "CPUs": int(custom_params.get("CPUs", 12)),
+            "resamp_alg_calc": str(custom_params.get("resamp_alg_calc", "nearest")),
+            "resamp_alg_deshift": str(custom_params.get("resamp_alg_deshift", "nearest")),
+            "match_gsd": bool(custom_params.get("match_gsd", True)),
+        }
+    
+    # Auto mode: adaptive parameter selection based on GSD ratio
     ref_info = _get_image_info(ref)
     tgt_info = _get_image_info(tgt)
 
@@ -76,6 +100,12 @@ def _choose_coreg_params(ref: Path, tgt: Path) -> dict:
         "window_size": (256, 256),
         "max_shift": 100,
         "min_reliability": 40,
+        "tieP_filter_level": 3,
+        "rs_max_outlier": 10,
+        "CPUs": 12,
+        "resamp_alg_calc": "nearest",
+        "resamp_alg_deshift": "nearest",
+        "match_gsd": True,
     }
 
     if ratio < 2:
@@ -112,6 +142,7 @@ def _run_arosics_coregistration(
     ref: Path,
     tgt: Path,
     out_img: Path,
+    custom_params: dict | None = None,
 ) -> dict[str, object]:
 
     try:
@@ -123,9 +154,10 @@ def _run_arosics_coregistration(
 
     ensure_dir(out_img.parent)
 
-    params = _choose_coreg_params(ref, tgt)
+    params = _choose_coreg_params(ref, tgt, custom_params)
 
-    print(f"\nAdaptive parameters selected:")
+    mode = "Manual" if custom_params else "Adaptive"
+    print(f"\n{mode} parameters selected:")
     print(json.dumps(params, indent=2))
 
     attempts = [
@@ -169,15 +201,15 @@ def _run_arosics_coregistration(
                 grid_res=attempt["grid_res"],
                 window_size=attempt["window_size"],
                 max_shift=params["max_shift"],
-                tieP_filter_level=3,
+                tieP_filter_level=params["tieP_filter_level"],
                 min_reliability=attempt["min_reliability"],
-                rs_max_outlier=10,
-                CPUs=12,
+                rs_max_outlier=params["rs_max_outlier"],
+                CPUs=params["CPUs"],
                 fmt_out="GTiff",
                 path_out=str(out_img),
-                resamp_alg_calc="nearest",
-                resamp_alg_deshift="nearest",
-                match_gsd=True,
+                resamp_alg_calc=params["resamp_alg_calc"],
+                resamp_alg_deshift=params["resamp_alg_deshift"],
+                match_gsd=params["match_gsd"],
                 q=False,
             )
 
@@ -250,6 +282,7 @@ def run_coregistration_and_cog(
     ref: Path,
     tgt: Path,
     run_dir: Path,
+    custom_params: dict | None = None,
 ) -> dict[str, str]:
 
     ensure_dir(run_dir)
@@ -265,6 +298,7 @@ def run_coregistration_and_cog(
         ref,
         tgt,
         coreg_output,
+        custom_params,
     )
 
     if not coreg_output.exists():
