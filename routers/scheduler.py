@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_db
 from api.config import settings
-from api.models import SchedulerConfiguration, CoregistrationJob, FolderInventory
+from api.models import SchedulerConfig, CoregistrationJob, FolderInventory
 from api.schemas.scheduler import PeriodicityRequest, AutoscanResponse
 from api.utils import list_image_files, calculate_folder_size
 from api.routers.jobs import _match_base_for_target, _create_job, _process_job
@@ -30,7 +30,7 @@ def get_scheduler_config(
     _ensure_default_configs(db)
 
     configs = list(
-        db.scalars(select(SchedulerConfiguration))
+        db.scalars(select(SchedulerConfig))
     )
 
     return {
@@ -39,9 +39,7 @@ def get_scheduler_config(
                 "id": c.id,
                 "enabled": c.enabled,
                 "folder_path": c.folder_path,
-                "recursive": c.recursive,
-                "sensor_hint": c.sensor_hint,
-                "interval_minutes": c.interval_minutes,
+             
             }
             for c in configs
         ]
@@ -53,18 +51,18 @@ def _ensure_default_configs(db: Session) -> None:
     Also performs startup sync of folder inventory for all configured
     target folders to auto-create inventory records.
     """
-    if db.scalar(select(SchedulerConfiguration.id).limit(1)) is not None:
-        configs = list(db.scalars(select(SchedulerConfiguration)))
+    if db.scalar(select(SchedulerConfig.id).limit(1)) is not None:
+        configs = list(db.scalars(select(SchedulerConfig)))
         changed = False
         for config in configs:
             normalized = _normalize_root_path(config.folder_path)
-            if config.sensor_hint == "target" or normalized in {"d:/target", "e:/target", "e:/ashishworkspace/coregistration-demo/target"}:
+            if  normalized in {"d:/target", "e:/target", "e:/ashishworkspace/coregistration-demo/target"}:
                 config.folder_path = str(settings.target_root)
-                config.sensor_hint = "target"
+              
                 changed = True
-            elif config.sensor_hint == "base" or normalized in {"d:/base", "e:/base", "e:/ashishworkspace/coregistration-demo/base"}:
+            elif  normalized in {"d:/base", "e:/base", "e:/ashishworkspace/coregistration-demo/base"}:
                 config.folder_path = str(settings.base_root)
-                config.sensor_hint = "base"
+              
                 changed = True
         if changed:
             db.commit()
@@ -72,8 +70,8 @@ def _ensure_default_configs(db: Session) -> None:
 
     db.add_all(
         [
-            SchedulerConfiguration(folder_path=str(settings.target_root), recursive=True, sensor_hint="target"),
-            SchedulerConfiguration(folder_path=str(settings.base_root), recursive=True, sensor_hint="base"),
+            SchedulerConfig(folder_path=str(settings.target_root)),
+            SchedulerConfig(folder_path=str(settings.base_root)),
         ]
     )
     db.commit()
@@ -88,7 +86,7 @@ def _sync_folder_inventory_at_startup(db: Session) -> None:
     Auto-creates FolderInventory records for folders that don't exist
     in DB yet. This ensures no manual initialization is required.
     """
-    configs = list(db.scalars(select(SchedulerConfiguration)))
+    configs = list(db.scalars(select(SchedulerConfig)))
     for config in configs:
         root_path = Path(config.folder_path)
         if root_path.exists():
@@ -134,6 +132,9 @@ async def set_periodicity(
             f"First scan will run after the interval expires."
         )
     }
+
+
+
 @router.post(
     "/autoscan",
     response_model=AutoscanResponse,
@@ -147,8 +148,8 @@ async def trigger_autoscan(
 
         configs = list(
             db.scalars(
-                select(SchedulerConfiguration).where(
-                    SchedulerConfiguration.enabled.is_(True)
+                select(SchedulerConfig).where(
+                    SchedulerConfig.enabled.is_(True)
                 )
             )
         )

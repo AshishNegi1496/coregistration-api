@@ -12,7 +12,7 @@ from api.models import (
     CoregistrationPixelSize,
     SystemPerformanceMetrics,
     OverallStatistics,
-    SchedulerConfiguration,
+    SchedulerConfig,
 )
 
 

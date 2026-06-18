@@ -50,7 +50,7 @@ def create_folder_inventory(
         folder_name=folder_name,
         folder_size_bytes=folder_size_bytes,
         modified_time=modified_time,
-        enabled=True,
+       
         last_scanned_at=datetime.now(timezone.utc),
     )
     db.add(inventory)
