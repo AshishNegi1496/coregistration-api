@@ -12,6 +12,7 @@ from sqlalchemy import (
     Sequence,
     String,
     Text,
+    BigInteger,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -22,6 +23,48 @@ from api.db import Base
 def utc_now() -> datetime:
     """Return current UTC datetime."""
     return datetime.now(timezone.utc)
+
+
+# ============================================================
+# FOLDER INVENTORY
+# ============================================================
+
+class FolderInventory(Base):
+    """Tracks folder-level metadata for change detection.
+    
+    This model provides lightweight change detection by monitoring
+    folder size and modification time. The scheduler uses this to
+    avoid reprocessing folders that haven't changed.
+    """
+    __tablename__ = "folder_inventory"
+
+    id = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    folder_name = mapped_column(
+        String(100),
+        unique=True,
+        nullable=False
+    )
+
+    folder_size_bytes = mapped_column(
+        BigInteger,
+        default=0,
+        nullable=False
+    )
+
+    modified_time = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    enabled = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False
+    )
+
+    last_scanned_at = mapped_column(
+        DateTime(timezone=True)
+    )
 
 
 # ============================================================
