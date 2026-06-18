@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_db
 from api.config import settings
-from api.models import SchedulerConfig, CoregJob
+from api.models import SchedulerConfiguration, CoregistrationJob
 from api.schemas.scheduler import PeriodicityRequest, AutoscanResponse
 from api.utils import list_image_files
 from api.routers.jobs import _match_base_for_target, _create_job, _process_job
@@ -47,8 +47,8 @@ def get_scheduler_config(
     }
 
 def _ensure_default_configs(db: Session) -> None:
-    if db.scalar(select(SchedulerConfig.id).limit(1)) is not None:
-        configs = list(db.scalars(select(SchedulerConfig)))
+    if db.scalar(select(SchedulerConfiguration.id).limit(1)) is not None:
+        configs = list(db.scalars(select(SchedulerConfiguration)))
         changed = False
         for config in configs:
             normalized = _normalize_root_path(config.folder_path)
@@ -66,8 +66,8 @@ def _ensure_default_configs(db: Session) -> None:
 
     db.add_all(
         [
-            SchedulerConfig(folder_path=str(settings.target_root), recursive=True, sensor_hint="target"),
-            SchedulerConfig(folder_path=str(settings.base_root), recursive=True, sensor_hint="base"),
+            SchedulerConfiguration(folder_path=str(settings.target_root), recursive=True, sensor_hint="target"),
+            SchedulerConfiguration(folder_path=str(settings.base_root), recursive=True, sensor_hint="base"),
         ]
     )
     db.commit()
@@ -82,7 +82,7 @@ async def set_periodicity(
 
     _ensure_default_configs(db)
 
-    configs = list(db.scalars(select(SchedulerConfig)))
+    configs = list(db.scalars(select(SchedulerConfiguration)))
 
     if not configs:
         raise HTTPException(
@@ -118,8 +118,8 @@ async def trigger_autoscan(db: Session = Depends(get_db)):
 
         configs = list(
             db.scalars(
-                select(SchedulerConfig)
-                .where(SchedulerConfig.enabled == True)
+                select(SchedulerConfiguration)
+                .where(SchedulerConfiguration.enabled == True)
             )
         )
 
@@ -139,7 +139,7 @@ async def trigger_autoscan(db: Session = Depends(get_db)):
 
         # Get all previously processed targets
         db_targets = db.scalars(
-            select(CoregJob.target_image)
+            select(CoregistrationJob.target_image)
         ).all()
 
         existing_targets = {
@@ -288,139 +288,3 @@ async def trigger_autoscan(db: Session = Depends(get_db)):
         import traceback
         traceback.print_exc()
         raise
-
-    _ensure_default_configs(db)
-
-    configs = list(
-        db.scalars(
-            select(SchedulerConfig)
-            .where(SchedulerConfig.enabled == True)
-        )
-    )
-
-    if not configs:
-        return AutoscanResponse(
-            status="ok",
-            scanned_folders=[],
-            new_files_found=[],
-            jobs_started=[],
-            message="No enabled scheduler configs found"
-        )
-
-    now = datetime.now(timezone.utc)
-
-    # Skip files already seen in ANY job
-    existing_targets = {
-        normalize_path(path)
-        for path in db.scalars(
-            select(CoregJob.target_image)
-        ).all()
-        if path
-    }
-
-    discovered: list[str] = []
-    new_files: list[str] = []
-    jobs_started: list[int] = []
-
-    scanned_folders: list[str] = []
-
-    for config in configs:
-
-        if config.sensor_hint != "target":
-            continue
-
-        # ----------------------------------------
-        # WAIT FOR CONFIGURED INTERVAL
-        # ----------------------------------------
-        if config.last_scan_at is not None:
-
-            elapsed_seconds = (
-                now - config.last_scan_at
-            ).total_seconds()
-
-            required_seconds = (
-                config.interval_minutes * 60
-            )
-
-            if elapsed_seconds < required_seconds:
-                continue
-
-        # ----------------------------------------
-
-        folder = Path(config.folder_path)
-
-        if not folder.exists():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Folder does not exist: {config.folder_path}"
-            )
-
-        scanned_folders.append(config.folder_path)
-
-        all_images = list(
-            list_image_files(
-                folder,
-                recursive=config.recursive
-            )
-        )
-
-        discovered.extend(
-            str(path)
-            for path in all_images
-        )
-
-        for img_path in all_images:
-
-            normalized_img = normalize_path(
-                str(img_path)
-            )
-
-            # Skip anything already processed
-            if normalized_img in existing_targets:
-                continue
-
-            new_files.append(str(img_path))
-
-            base_path, match_reason = _match_base_for_target(
-                img_path,
-                config.sensor_hint
-            )
-
-            if base_path is None:
-                continue
-
-            job = _create_job(
-                db,
-                target_path=img_path,
-                base_path=base_path,
-                sensor_name=config.sensor_hint or "unknown",
-            )
-
-            db.commit()
-
-            # Prevent duplicates during same scan
-            existing_targets.add(normalized_img)
-
-            _process_job(
-                job,
-                img_path,
-                base_path,
-                db
-            )
-
-            db.refresh(job)
-
-            jobs_started.append(job.job_no)
-
-        config.last_scan_at = now
-        config.updated_at = now
-
-    db.commit()
-
-    return AutoscanResponse(
-        status="ok",
-        scanned_folders=scanned_folders,
-        new_files_found=new_files,
-        jobs_started=jobs_started,
-        message=f"Found {len(new_files)} new file(s), started {len(jobs_started)} job(s)"
-    )

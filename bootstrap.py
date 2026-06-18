@@ -6,13 +6,13 @@ from api.db import Base
 
 # Import all models so SQLAlchemy registers them
 from api.models import (
-    CoregJob,
-    CoregMetrics,
-    CoregParameter,
-    CoregPixelSize,
-    CoregSystemPerformance,
-    CoregOverallStat,
-    SchedulerConfig,
+    CoregistrationJob,
+    CoregistrationMetrics,
+    CoregistrationParameters,
+    CoregistrationPixelSize,
+    SystemPerformanceMetrics,
+    OverallStatistics,
+    SchedulerConfiguration,
 )
 
 
