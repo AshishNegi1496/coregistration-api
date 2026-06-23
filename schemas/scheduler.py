@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, ConfigDict
 class PeriodicityRequest(BaseModel):
     """Request to set the scan periodicity in minutes."""
     interval_minutes: int = Field(60, ge=1, description="Interval in minutes (e.g., 1, 5, 60, 120)")
+    enabled: bool | None = Field(None, description="Optional scheduler enabled flag")
 
 
 class AutoscanResponse(BaseModel):

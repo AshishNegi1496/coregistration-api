@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from api.utils import ensure_dir
+from utils import ensure_dir
 
 
 def _translate_to_cog(source: Path, destination: Path) -> None:
@@ -211,6 +211,7 @@ def _run_arosics_coregistration(
                 resamp_alg_deshift=params["resamp_alg_deshift"],
                 match_gsd=params["match_gsd"],
                 q=False,
+                v=True,
             )
 
             coreg.calculate_spatial_shifts()
@@ -283,6 +284,7 @@ def run_coregistration_and_cog(
     tgt: Path,
     run_dir: Path,
     custom_params: dict | None = None,
+    output_suffix: str = "",
 ) -> dict[str, str]:
 
     ensure_dir(run_dir)
@@ -291,8 +293,8 @@ def run_coregistration_and_cog(
     cog_dir = ensure_dir(run_dir / "cog")
     report_dir = ensure_dir(run_dir / "reports")
 
-    coreg_output = coreg_dir / f"{tgt.stem}_coregistered.tif"
-    cog_output = cog_dir / f"{tgt.stem}_cog.tif"
+    coreg_output = coreg_dir / f"{tgt.stem}_coregistered{output_suffix}.tif"
+    cog_output = cog_dir / f"{tgt.stem}_cog{output_suffix}.tif"
 
     summary = _run_arosics_coregistration(
         ref,

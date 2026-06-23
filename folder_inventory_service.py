@@ -12,8 +12,8 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.models import FolderInventory
-from api.utils import calculate_folder_size
+from models import FolderInventory
+from utils import calculate_folder_size
 
 
 def get_folder_inventory(db: Session, folder_name: str) -> Optional[FolderInventory]:

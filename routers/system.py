@@ -6,16 +6,16 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from api.config import settings
-from api.db import get_db
-from api.models import CoregJob, CoregMetrics, CoregParameter, CoregPixelSize, CoregSystemPerformance, CoregOverallStat
+from config import settings
+from db import get_db
+from models import CoregistrationJob
 
 router = APIRouter(prefix="/system", tags=["System"])
 
 
 @router.get("/health")
 async def get_system_health(db: Session = Depends(get_db)):
-    job_count = db.scalar(select(func.count()).select_from(Job)) or 0
+    job_count = db.scalar(select(func.count()).select_from(CoregistrationJob)) or 0
     return {
         "status": "healthy",
         "database": "connected",

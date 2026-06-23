@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from sqlalchemy.engine import Engine
 
-from api.db import Base
+from db import Base
 
 # Import all models so SQLAlchemy registers them
-from api.models import (
+from models import (
     CoregistrationJob,
     CoregistrationMetrics,
     CoregistrationParameters,
     CoregistrationPixelSize,
+    FolderProcessingAudit,
+    FolderSnapshot,
     SystemPerformanceMetrics,
     OverallStatistics,
     SchedulerConfig,

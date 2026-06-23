@@ -12,8 +12,8 @@ Remaining tables:
 - CoregMetrics, CoregParameter, CoregPixelSize, CoregSystemPerformance, CoregOverallStat
 """
 
-from api.db import engine
-from api.models import Base
+from db import engine
+from models import Base
 
 
 def init_db():

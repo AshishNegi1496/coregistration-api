@@ -17,7 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from api.db import Base
+from db import Base
 
 
 def utcnow() -> datetime:
@@ -459,3 +459,53 @@ class FolderInventory(Base):
     scheduler_config: Mapped["SchedulerConfig"] = relationship(
         back_populates="folder_inventories"
     )
+
+
+# ============================================================
+# FOLDER SNAPSHOT - LIVE MONITORING METADATA
+# ============================================================
+
+class FolderSnapshot(Base):
+    """Stores current metadata for satellite-country target folders."""
+    __tablename__ = "folder_snapshot"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    folder_name: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
+    satellite: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    country: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    folder_path: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+
+    modified_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    total_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+# ============================================================
+# FOLDER PROCESSING AUDIT
+# ============================================================
+
+class FolderProcessingAudit(Base):
+    """Audit trail for event-detected file processing in monitored folders."""
+    __tablename__ = "folder_processing_audit"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    input_file_path: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    folder_name: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    satellite: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    country: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="detected", index=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    output_path: Mapped[str | None] = mapped_column(Text)
+
+    job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("coreg_job.id", ondelete="SET NULL"))

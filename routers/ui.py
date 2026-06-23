@@ -5,8 +5,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from api.config import settings
-from api.utils import list_image_files
+from config import settings
+from utils import list_image_files
 
 router = APIRouter(tags=["UI"])
 
@@ -538,11 +538,9 @@ async def ui_page() -> HTMLResponse:
           try {{
             const res = await fetch("/api/scheduler/config");
             const data = await res.json();
-            document.getElementById("schedulerEnabled").value = String(data.enabled);
-            if (data.configs && data.configs.length > 0) {{
-              const interval = data.configs[0].interval_minutes || 60;
-              document.getElementById("schedulerInterval").value = String(interval);
-            }}
+            document.getElementById("schedulerEnabled").value = String(data.enabled ?? true);
+            const interval = data.scan_interval_minutes || (data.configs && data.configs[0] && data.configs[0].scan_interval_minutes) || 60;
+            document.getElementById("schedulerInterval").value = String(interval);
             document.getElementById("schedulerStatus").textContent = `Loaded config. Last scan: ${{data.last_scan_at || "Never"}}`;
             showOutput(data);
           }} catch (err) {{
@@ -556,22 +554,16 @@ async def ui_page() -> HTMLResponse:
             const interval = parseInt(document.getElementById("schedulerInterval").value, 10);
             const enabled = document.getElementById("schedulerEnabled").value === "true";
             const payload = {{
-              folders: [
-                {{ path: "/api/settings/target_root", recursive: true, sensor_hint: "target" }},
-                {{ path: "/api/settings/base_root", recursive: true, sensor_hint: "base" }}
-              ],
               interval_minutes: interval,
-              min_overlap_pct: 10.0,
-              max_cloud_cover_pct: 80.0,
               enabled: enabled
             }};
-            const res = await fetch("/api/scheduler/autoscan ", {{
+            const res = await fetch("/api/scheduler/periodicity", {{
               method: "POST",
               headers: {{ "Content-Type": "application/json" }},
               body: JSON.stringify(payload)
             }});
             const data = await res.json();
-            document.getElementById("schedulerStatus").textContent = `Config saved. Interval: ${{interval}} min, Enabled: ${{enabled}}`;
+            document.getElementById("schedulerStatus").textContent = data.message || `Config saved. Interval: ${{interval}} min, Enabled: ${{enabled}}. Next scan after interval.`;
             showOutput(data);
           }} catch (err) {{
             document.getElementById("schedulerStatus").textContent = "Failed to save scheduler config.";
@@ -602,7 +594,7 @@ async def ui_page() -> HTMLResponse:
               method: "POST"
             }});
             const data = await res.json();
-            document.getElementById("schedulerStatus").textContent = `Manual scan complete. Found ${{data.discovered_files?.length || 0}} files.`;
+            document.getElementById("schedulerStatus").textContent = `Manual scan complete. Found ${{data.new_files_found?.length || 0}} new file(s), started ${{data.jobs_started?.length || 0}} job(s).`;
             showOutput(data);
             await refreshData();
           }} catch (err) {{

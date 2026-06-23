@@ -2,16 +2,29 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from api.bootstrap import ensure_schema
-from api.db import Base, engine
-from api.routers import jobs, ui, scheduler
+from bootstrap import ensure_schema
+from db import Base, engine
+from folder_monitor_service import FolderMonitorService
+from scheduler_service import SchedulerService
+from routers import jobs, ui, scheduler
+from config import settings
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_schema(engine)
-    yield
+    monitor = FolderMonitorService(settings.target_root)
+    monitor.start()
+    app.state.folder_monitor = monitor
+    scheduler_service = SchedulerService()
+    scheduler_service.start()
+    app.state.scheduler_service = scheduler_service
+    try:
+        yield
+    finally:
+        scheduler_service.stop()
+        monitor.stop()
 
 
 app = FastAPI(

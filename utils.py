@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 
 IMAGE_EXTENSIONS = {".tif", ".tiff", ".jp2"}
+SATELLITE_COUNTRY_PATTERN = re.compile(r"^(?P<satellite>[A-Za-z0-9]+)_(?P<country>[A-Za-z0-9]+)$")
 SENSOR_ALIASES = {
     "sentinel-2": {"sentinel-2", "sentinel2", "s2"},
     "cartosat": {"cartosat", "c2"},
@@ -16,6 +17,33 @@ SENSOR_ALIASES = {
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def normalize_path(path: str | Path) -> str:
+    return str(Path(path).resolve()).replace("\\", "/").lower()
+
+
+def parse_satellite_country_folder(folder_name: str) -> tuple[str, str] | None:
+    match = SATELLITE_COUNTRY_PATTERN.match(folder_name.strip())
+    if not match:
+        return None
+    return match.group("satellite").upper(), match.group("country").upper()
+
+
+def sensor_from_folder_name(folder_name: str) -> str:
+    parts = parse_satellite_country_folder(folder_name)
+    if parts:
+        return parts[0]
+    return folder_name.split("_")[0] if "_" in folder_name else folder_name
+
+
+def is_image_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+
+
+def file_signature(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return stat.st_size, int(stat.st_mtime_ns)
 
 
 def calculate_folder_size(folder: Path) -> int:
@@ -393,16 +421,13 @@ def is_file_already_processed(
         file_path: Path to the TIFF file (will be normalized)
     
     Returns:
-        True if CoregJob with matching target_image exists, False otherwise
+        True if CoregistrationJob with matching target image exists, False otherwise
     """
-    from api.models import CoregJob
-    
-    # Normalize path for comparison
-    normalized_path = str(file_path.resolve())
-    
-    # Query for any job with this target_image
-    existing_job = db.query(CoregJob).filter(
-        CoregJob.target_image == normalized_path
+    from models import CoregistrationJob
+
+    normalized_path = normalize_path(file_path)
+    existing_job = db.query(CoregistrationJob).filter(
+        CoregistrationJob.target_image_path == normalized_path
     ).first()
     
     return existing_job is not None

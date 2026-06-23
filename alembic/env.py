@@ -3,8 +3,8 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 # Import your models' Base metadata here
-from api.db import Base
-from api.models import FolderInventory  # Ensure model is imported for metadata
+from db import Base
+from models import FolderInventory  # Ensure model is imported for metadata
 
 config = context.config
 
